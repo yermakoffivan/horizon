@@ -417,9 +417,11 @@ impl Panel {
         self.layout.size = size;
     }
 
-    /// Restart the terminal process while keeping the same panel identity,
-    /// layout, and session binding. For agent panels this
-    /// resumes the existing session so no work is lost.
+    /// Restart the terminal process while keeping the same panel identity
+    /// and layout. Agent panels start a fresh session unless the panel was
+    /// explicitly rebound to a specific session (`PanelResume::Session`),
+    /// in which case that session is resumed. To resume the previous
+    /// session, use the "Rebind Session" submenu.
     ///
     /// # Errors
     ///
@@ -451,7 +453,14 @@ impl Panel {
         // Graceful shutdown of the old terminal.
         let _ = terminal.shutdown_with_timeout(Duration::from_secs(2));
 
-        let should_resume = self.kind.supports_session_binding() && self.session_binding.is_some();
+        // Restart always starts a fresh agent session: `should_resume` is
+        // hard-coded to `false` so the binding is ignored. An explicit
+        // `PanelResume::Session { .. }` (set by "Rebind Session") still wins
+        // because `resolve_launch_command` honors it directly.
+        let should_resume = false;
+        if !matches!(self.resume, PanelResume::Session { .. }) {
+            self.session_binding = None;
+        }
         let (program, launch_args) = resolve_launch_command(
             self.launch_command.clone(),
             self.launch_args.clone(),
