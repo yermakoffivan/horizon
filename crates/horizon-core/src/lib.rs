@@ -28,6 +28,7 @@ mod usage_dashboard;
 mod usage_stats;
 mod view;
 mod workspace;
+mod worktree;
 
 pub use agents::{AgentDefinition, AgentIntegrationKind, AgentResumeMode, agent_definition, all_agent_kinds};
 pub use alacritty_terminal::index::Side as TerminalSide;
@@ -67,3 +68,4 @@ pub use usage_dashboard::UsageDashboard;
 pub use usage_stats::{DailyUsage, ToolUsage, UsageSnapshot, format_cost, format_tokens};
 pub use view::{CanvasViewState, DEFAULT_CANVAS_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, clamp_canvas_zoom};
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};
+pub use worktree::WorktreeManager;

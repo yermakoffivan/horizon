@@ -20,6 +20,9 @@ back into large multi-purpose modules.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
   session discovery and external-store parsing belong in `runtime_state/`
   helper modules.
+- `worktree.rs` owns Agent Squad git isolation primitives only: creating slot
+  worktrees, collecting diffs, applying diffs into a review checkout, and
+  pruning worktree directories.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a
