@@ -21,6 +21,7 @@ pub(super) const SIDEBAR_MIN_WIDTH: f32 = 168.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ToolbarAction {
     QuickNav,
+    Squad,
     RemoteHosts,
     Sessions,
     Update,
@@ -28,11 +29,12 @@ pub(super) enum ToolbarAction {
 }
 
 impl ToolbarAction {
-    const SECONDARY: [Self; 1] = [Self::RemoteHosts];
+    const SECONDARY: [Self; 2] = [Self::Squad, Self::RemoteHosts];
 
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::QuickNav => "Quick Nav",
+            Self::Squad => "Squad",
             Self::RemoteHosts => "Remote Hosts",
             Self::Sessions => "Sessions",
             Self::Update => "Update",
@@ -93,10 +95,13 @@ pub(super) fn root_toolbar_layout(viewport: Rect, show_update: bool) -> RootTool
         ),
     );
 
+    let max_secondary = ToolbarAction::SECONDARY.len();
     let states = [
-        (true, 1_usize, true),
+        (true, max_secondary, true),
+        (false, max_secondary, true),
         (false, 1_usize, true),
         (false, 0_usize, true),
+        (false, max_secondary, false),
         (false, 1_usize, false),
         (false, 0_usize, false),
     ];
@@ -238,7 +243,10 @@ mod tests {
         let layout = root_toolbar_layout(viewport, false);
 
         assert!(!layout.show_tagline);
-        assert_eq!(layout.overflow_actions, vec![ToolbarAction::RemoteHosts]);
+        assert_eq!(
+            layout.overflow_actions,
+            vec![ToolbarAction::Squad, ToolbarAction::RemoteHosts]
+        );
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(layout.visible_items.contains(&ToolbarItem::OverflowMenu));
         assert!((layout.search_rect.center().y - TOOLBAR_HEIGHT * 0.5).abs() <= f32::EPSILON);
@@ -264,6 +272,10 @@ mod tests {
                 .visible_items
                 .contains(&ToolbarItem::Action(ToolbarAction::Settings))
         );
+        let squad_visible = layout
+            .visible_items
+            .contains(&ToolbarItem::Action(ToolbarAction::Squad));
+        assert!(squad_visible || layout.overflow_actions.contains(&ToolbarAction::Squad));
     }
 
     #[test]
@@ -276,6 +288,21 @@ mod tests {
                 .visible_items
                 .contains(&ToolbarItem::Action(ToolbarAction::Update))
         );
-        assert_eq!(layout.overflow_actions, vec![ToolbarAction::RemoteHosts]);
+        assert_eq!(
+            layout.overflow_actions,
+            vec![ToolbarAction::Squad, ToolbarAction::RemoteHosts]
+        );
+    }
+
+    #[test]
+    fn toolbar_keeps_squad_visible_on_wide_viewports() {
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1280.0, 768.0));
+        let layout = root_toolbar_layout(viewport, false);
+
+        assert!(
+            layout
+                .visible_items
+                .contains(&ToolbarItem::Action(ToolbarAction::Squad))
+        );
     }
 }

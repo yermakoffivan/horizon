@@ -144,6 +144,13 @@ impl HorizonApp {
             last_lease_refresh: Some(Instant::now()),
             persistent: true,
         });
+        self.agent_squad = self
+            .session_store
+            .load_agent_squad(&session.session_id)
+            .unwrap_or_else(|error| {
+                tracing::warn!("failed to load Agent Squad state: {error}");
+                super::squad::empty_squad()
+            });
         self.apply_runtime_state(&session.runtime_state);
     }
 
@@ -155,6 +162,7 @@ impl HorizonApp {
             last_lease_refresh: None,
             persistent: false,
         });
+        self.agent_squad = super::squad::empty_squad();
         self.transcript_root = None;
         self.startup_chooser = None;
         self.apply_runtime_state(runtime_state);

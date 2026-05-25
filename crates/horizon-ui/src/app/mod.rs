@@ -18,6 +18,7 @@ mod settings;
 mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;
+mod squad;
 mod ssh_upload;
 mod startup_session;
 mod updates;
@@ -33,9 +34,9 @@ use std::time::Instant;
 
 use egui::{Color32, Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
-    AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, ManagedInstall,
-    PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore,
-    ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
+    AgentSessionCatalog, AgentSquad, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher,
+    ManagedInstall, PanelId, PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease,
+    SessionStore, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
 use self::canvas::CanvasGridCache;
@@ -206,6 +207,8 @@ pub struct HorizonApp {
     last_terminal_output_at: Option<Instant>,
     settings: Option<SettingsEditor>,
     session_manager: Option<RuntimeSessionManagerState>,
+    agent_squad: AgentSquad,
+    squad_panel: Option<squad::SquadPanelState>,
     managed_install: Option<ManagedInstall>,
     surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
     surge_available_update: Option<AvailableUpdate>,
@@ -352,6 +355,8 @@ impl HorizonApp {
             last_terminal_output_at: Some(Instant::now()),
             settings: None,
             session_manager: None,
+            agent_squad: squad::empty_squad(),
+            squad_panel: None,
             managed_install,
             surge_update_check_rx: None,
             surge_available_update: None,

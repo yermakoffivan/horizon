@@ -1,134 +1,373 @@
-# macOS Agent Squad Smoke Plan
+# macOS/OSX Agent Squad Smoke Plan
 
-This retained smoke plan covers the Agent Squad epic from the first worktree
-primitive slice through the later UI fanout slices. Run it on macOS before
-marking an Agent Squad PR ready when the PR touches core worktree logic,
-composer/dashboard UI, panel spawning, slot status, reviewer automation, or
-`squad.json` persistence.
+This temporary smoke-test plan covers every implementation slice for issue
+203, from worktree primitives through cleanup. Run the section for each slice
+as that slice lands. Before marking the PR ready after slice 5 or slice 6, rerun
+the full plan on macOS with the final branch or commit.
+
+Keep this file in the PR while the epic is under active validation. Remove it
+after the final UI validation pass unless the reviewer asks to keep it.
 
 ## Environment
 
 - macOS with Xcode Command Line Tools installed.
 - Rust stable 1.88 or newer.
+- The branch or commit under test checked out locally.
 - A disposable Git repository with at least one committed file.
-- A clean Horizon checkout on the branch under test.
-- An isolated runtime home:
+- An isolated Horizon runtime home:
 
 ```bash
 export HORIZON_SMOKE_HOME="$(mktemp -d)"
-export HOME="$HORIZON_SMOKE_HOME"
+export HORIZON_HOME="$HORIZON_SMOKE_HOME/.horizon"
+mkdir -p "$HORIZON_HOME"
 ```
 
-## Current Slice: Worktree Primitives
+Prepare the disposable repository:
 
-1. Validate formatting and focused tests:
+```bash
+export SQUAD_REPO="$HORIZON_SMOKE_HOME/repo"
+mkdir -p "$SQUAD_REPO"
+cd "$SQUAD_REPO"
+git init
+git config user.name "Horizon Smoke"
+git config user.email "horizon-smoke@example.invalid"
+printf 'one\n' > smoke.txt
+git add smoke.txt
+git commit -m "seed smoke repository"
+cd -
+```
+
+Use debug builds for UI smoke work:
+
+```bash
+cargo build
+HORIZON_HOME="$HORIZON_HOME" target/debug/horizon
+```
+
+Capture screenshots with:
+
+```bash
+screencapture -x "$HORIZON_SMOKE_HOME/<name>.png"
+```
+
+## Shared Validation Gate
+
+Run this gate after each slice before committing or pushing that slice:
 
 ```bash
 cargo fmt --all -- --check
-cargo test -p horizon-core worktree
 ./scripts/check-maintainability.sh
+cargo test --workspace
+cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --workspace --lib --bins --examples -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic
 ```
 
-2. In a disposable Git repository, exercise the core worktree path through a
-   small Rust caller or unit-test harness:
-   - create slot worktrees under
-     `~/.horizon/squad-tmp/<run-id>/s{1,2,3}/`
-   - edit one slot worktree
-   - collect its diff
-   - apply that diff into `~/.horizon/squad-tmp/<run-id>/_review/`
-   - remove a slot worktree and confirm the directory is gone
+For UI slices, also launch the debug app and capture screenshots after launch,
+after opening the Squad surface, after resizing narrower, and after resizing
+back wider.
 
-3. Confirm the source repository still has its original worktree intact and
-   that no performer worktree was mutated by applying into `_review`.
+## Slice 1: Worktree Primitives
 
-## Current Slice: Data Model And Persistence
+Scope:
 
-1. Validate the model, transition helpers, and per-session persistence:
+- `crates/horizon-core/src/worktree.rs`
+- `WorktreeManager::create`, `remove`, `diff`, and `apply_to`
+- `tempfile` Git repository tests
+
+Validation:
+
+```bash
+cargo test -p horizon-core worktree
+```
+
+Manual smoke:
+
+1. In the disposable repository, create three slot worktrees under
+   `$HORIZON_HOME/squad-tmp/<run-id>/s1`, `s2`, and `s3`.
+2. Edit `smoke.txt` in `s1` and collect the slot diff.
+3. Create a primary review worktree under
+   `$HORIZON_HOME/squad-tmp/<run-id>/_review`.
+4. Apply the `s1` diff into `_review`.
+5. Remove `s1` and confirm the worktree registration and directory are gone.
+
+Expected:
+
+- The source repository remains clean.
+- Applying a slot diff changes `_review`, not the performer worktree.
+- Empty diffs are accepted as no-ops.
+- Invalid diffs fail without modifying `_review`.
+
+Evidence:
+
+- Focused test output.
+- `git worktree list` before and after removal.
+- `git -C "$SQUAD_REPO" status --short`.
+
+## Slice 2: Data Model And Persistence
+
+Scope:
+
+- `crates/horizon-core/src/squad.rs`
+- `AgentSquad`, `SquadRun`, `PerformerSlot`, `WorkItem`,
+  `PerformerReport`
+- Per-session `~/.horizon/sessions/<sid>/squad.json`
+- Atomic save on state transitions
+
+Validation:
 
 ```bash
 cargo test -p horizon-core squad
 cargo test -p horizon-core session_store::tests::agent_squad
 ```
 
-2. Inspect a saved `squad.json` fixture from an isolated smoke session and
-   confirm it contains:
-   - `version: 1`
-   - one or more `runs`
-   - researcher and reviewer `AgentPanelLink` fields
-   - performer slot `work_item`, `scratch`, `panel_local_id`, and `report`
-     fields
-   - `primary_worktree` when review worktree creation has run
+Manual smoke:
 
-3. Exercise one transition through `SessionStore::update_agent_squad` and
-   confirm the changed run status survives a fresh `load_agent_squad` call.
+1. Create or update one `AgentSquad` run through `SessionStore`.
+2. Confirm `squad.json` exists under the active session directory.
+3. Exercise at least one transition through `SessionStore::update_agent_squad`.
+4. Reload the same session and confirm the transition persists.
 
-## UI Shell Slices
+Expected `squad.json` fields:
 
-Run these once the composer and dashboard are wired.
+- `version`
+- `runs`
+- `goal`, `status`, `created_at_millis`
+- researcher and reviewer `AgentPanelLink` objects
+- performer `work_item`, `assigned_kind`, `panel_local_id`, `scratch`, and
+  `report`
+- `primary_worktree`
+- `plan_text`
 
-1. Build and launch the debug app from the branch under test:
+Evidence:
+
+- Focused test output.
+- Redacted `cat "$HORIZON_HOME/sessions/<sid>/squad.json"`.
+- Before/after status values from the transition.
+
+## Slice 3: UI Shell, Composer, And Dashboard
+
+Scope:
+
+- `crates/horizon-ui/src/app/squad/{mod,render,state,composer,dashboard}.rs`
+- Toolbar `Squad` entry
+- Command palette `CommandId::OpenSquad`
+- Dashboard and composer backed by the persisted model
+- Start Run stub that creates persisted run state without spawning panels
+
+Validation:
 
 ```bash
-cargo build
-HORIZON_HOME="$HORIZON_SMOKE_HOME/.horizon" target/debug/horizon
+cargo test -p horizon-ui command_registry
+cargo test -p horizon-ui squad
+cargo test -p horizon-ui root_chrome
 ```
 
-2. Open the Squad surface from the toolbar. Verify:
-   - the dashboard opens without resizing or obscuring the terminal canvas
-   - `New run` opens the composer
-   - the composer keeps goal text, role selectors, performer count, isolation
-     mode, and auto-start toggles visible at 1280x800 and 1728x1117
+Manual smoke:
 
-3. Open the command palette and run the Squad command. Verify it focuses the
-   same Squad surface rather than creating duplicate overlays.
+1. Launch the debug app with `HORIZON_HOME` set to the isolated runtime.
+2. Open Squad from the toolbar.
+3. Verify the dashboard opens above the canvas and does not get hidden by the
+   empty-canvas card, HUD, minimap, or toolbar.
+4. Click `New run` and verify the composer shows:
+   - goal editor
+   - researcher selector
+   - reviewer selector
+   - performer kind selector
+   - performer count selector
+   - worktree isolation label
+   - advanced toggles
+5. Enter a goal, keep three performers, and click `Start Run`.
+6. Verify the dashboard shows a new run row and no performer panels are spawned
+   yet.
+7. Reopen Squad from the command palette by searching for `squad` and verify it
+   focuses the same Squad surface rather than creating duplicates.
+8. Restart Horizon with the same `HORIZON_HOME` and confirm the run row is
+   restored from `squad.json`.
 
-4. Resize the window smaller and larger. Capture screenshots at launch, after
-   opening the composer, and after returning to the dashboard.
+Resize checks:
 
-## Fanout And Review Slices
+- 1280x800: composer content remains readable and controls do not overlap.
+- 1728x1117: dashboard remains compact and does not stretch into unreadable
+  spacing.
+- Narrow window: Squad remains usable or scrollable; no text overlaps.
 
-Run these once Start Run, performer panels, and reviewer automation are wired.
+Evidence:
 
-1. Use a disposable Git repository as Horizon's active panel cwd.
-2. Open Squad composer, enter a goal, set 3 performers, keep worktree isolation,
-   and start the run.
-3. Verify on disk:
-   - `~/.horizon/squad-tmp/<run-id>/s1/`
-   - `~/.horizon/squad-tmp/<run-id>/s2/`
-   - `~/.horizon/squad-tmp/<run-id>/s3/`
-   - `~/.horizon/squad-tmp/<run-id>/_review/`
-4. In each performer panel, run `pwd` and confirm it matches that slot's
-   worktree path.
-5. Verify each performer panel receives the generated brief through stdin and
-   that focusing each slot returns to the correct panel.
-6. Mark each slot Done manually. Confirm the reviewer panel auto-spawns only
-   after all slots are Done.
-7. In the reviewer panel, run `pwd` and confirm it is `_review`.
-8. Confirm reviewer context includes the original goal, plan text, every slot
-   report, and every slot diff.
-9. Restart Horizon with the same isolated home. Verify the dashboard restores
-   the run, slot statuses, worktree paths, and reviewer link from
-   `~/.horizon/sessions/<sid>/squad.json`.
-10. Create a blocked slot and mark the remaining slots Done. Confirm Horizon
-    prompts for skip blocked or retry blocked instead of auto-spawning the
-    reviewer blindly.
+- Screenshot after launch.
+- Screenshot of empty dashboard.
+- Screenshot of composer at the narrowest tested size.
+- Screenshot of dashboard after the Start Run stub.
+- Redacted `squad.json` showing the stubbed run.
 
-## Regression Checks
+## Slice 4: Spawn And Fanout
 
-- Slot worktree creation must never write into the primary checkout.
-- Applying a slot diff to `_review` must not modify the slot worktree.
-- Restarting Horizon must not duplicate existing performer or reviewer panels.
-- Deleting a run must remove only that run's scratch worktrees.
-- Empty diffs must be accepted without changing `_review`.
-- Invalid diffs must produce a visible failure and leave `_review` unchanged.
+Scope:
 
-## Evidence To Attach To PR
+- Start Run creates N performer worktrees and one primary review worktree.
+- Performer panels spawn with `cwd` set to each slot worktree.
+- Per-slot brief prompts are written to each performer panel.
+- Scenario A run lane renders live slot chips.
+- Manual `Mark Done` and `Block` transitions are available.
 
-- The exact commit SHA tested.
-- Terminal output for the validation commands.
-- Screenshot of the dashboard.
-- Screenshot of the composer at the smallest tested window size.
-- Screenshot of the run lane with three performers.
-- `find ~/.horizon/squad-tmp/<run-id> -maxdepth 2 -type d | sort` output.
-- `cat ~/.horizon/sessions/<sid>/squad.json` with secrets redacted if any are
-  ever added.
+Manual smoke:
+
+1. Launch Horizon with the disposable repository as the active panel cwd.
+2. Open Squad composer from the toolbar.
+3. Enter a goal that can be split into three independent file edits.
+4. Set performers to three and keep worktree isolation.
+5. Start the run.
+6. Verify directories:
+   - `$HORIZON_HOME/squad-tmp/<run-id>/s1`
+   - `$HORIZON_HOME/squad-tmp/<run-id>/s2`
+   - `$HORIZON_HOME/squad-tmp/<run-id>/s3`
+   - `$HORIZON_HOME/squad-tmp/<run-id>/_review`
+7. In each performer panel, run `pwd`.
+8. Confirm each `pwd` matches the slot worktree path.
+9. Confirm each performer panel received the generated brief.
+10. Use `Focus` on each slot and verify focus returns to the correct panel.
+11. Mark one slot Done and one slot Blocked.
+12. Confirm the run lane and `squad.json` reflect both transitions.
+
+Expected:
+
+- Performer worktrees never share the same directory.
+- The primary checkout remains clean unless the user edits it directly.
+- Slot chips show queued, working, done, and blocked states correctly.
+- Manual status changes persist immediately.
+
+Evidence:
+
+- Screenshot of run lane with three performers.
+- `find "$HORIZON_HOME/squad-tmp/<run-id>" -maxdepth 2 -type d | sort`.
+- `pwd` output from each performer panel.
+- Redacted `squad.json` after status changes.
+
+## Slice 5: Reviewer Auto-Spawn And Slot Detail
+
+Scope:
+
+- Reviewer auto-spawns after all slots are Done.
+- Reviewer panel cwd is the primary review worktree.
+- Reviewer receives consolidated context: original goal, plan text, every slot
+  report, and every slot diff.
+- Blocked-slot prompt appears instead of blindly spawning reviewer.
+- Scenario C slot drill-down renders slot worktree, brief, report, diff, and
+  reviewer notes.
+
+Manual smoke, all-done path:
+
+1. Start a three-performer run from the disposable repository.
+2. Make a distinct edit in each performer worktree.
+3. Mark each performer slot Done with a short report and validation command.
+4. Confirm the reviewer panel auto-spawns only after the last Done transition.
+5. In the reviewer panel, run `pwd` and confirm it is `_review`.
+6. Confirm reviewer context includes:
+   - the original goal
+   - the researcher plan
+   - all performer reports
+   - all slot diffs
+7. Apply or inspect the slot diffs in `_review`.
+
+Manual smoke, blocked path:
+
+1. Start another run with at least two performers.
+2. Mark one slot Blocked and all remaining slots Done.
+3. Confirm Horizon surfaces a skip-blocked or retry-blocked decision.
+4. Confirm the reviewer is not auto-spawned until the user chooses a path.
+
+Slot detail smoke:
+
+1. Open a slot from the run lane.
+2. Verify the detail surface shows status, panel link, scratch path, work item,
+   performer report, diff, and reviewer notes.
+3. Use the slot detail `Focus` or equivalent action and verify it selects the
+   correct performer panel.
+
+Evidence:
+
+- Screenshot of reviewer waiting state.
+- Screenshot after reviewer auto-spawn.
+- Screenshot of blocked-slot decision prompt.
+- Screenshot of slot detail.
+- Redacted reviewer prompt/context.
+- `git -C "$HORIZON_HOME/squad-tmp/<run-id>/_review" diff --stat`.
+
+## Slice 6: Polish, Cleanup, And Regression Pass
+
+Scope:
+
+- Run deletion removes only that run's scratch worktrees.
+- Existing runs restore without duplicate performer or reviewer panels.
+- Optional done-hint detection remains advisory, not an automatic status change.
+- Final maintainability and pedantic clippy gates are green.
+
+Manual smoke:
+
+1. Create two Squad runs in the same Horizon session.
+2. Delete one run.
+3. Confirm only that run's scratch directory is removed.
+4. Confirm the other run's worktrees and `squad.json` entry remain.
+5. Restart Horizon with the same `HORIZON_HOME`.
+6. Confirm existing runs restore once and do not duplicate panels.
+7. If done-hint detection is present, print the sentinel text in a performer
+   panel and confirm Horizon shows a hint without changing the slot to Done
+   until the user confirms.
+8. Resize the app, detach and reattach a workspace if relevant, and reopen
+   Squad. Confirm overlays stay layered above the canvas and below modal
+   dialogs.
+
+Expected:
+
+- Deleting a run cannot remove the source checkout or another run's worktree.
+- Restart restore is idempotent.
+- Cleanup errors are visible and leave state recoverable.
+- The dashboard remains accurate after restart, delete, and restore.
+
+Evidence:
+
+- Before/after `find "$HORIZON_HOME/squad-tmp" -maxdepth 3 -type d | sort`.
+- Redacted `squad.json` before and after deletion.
+- Screenshot after restart restore.
+- Final validation gate output.
+
+## Full End-To-End Pass
+
+Run this after slice 5 and again after slice 6:
+
+1. Open Squad composer from toolbar and command palette.
+2. Set a goal and three performers.
+3. Start the run.
+4. Verify three performer worktrees and one primary worktree exist.
+5. Verify each performer panel starts in the correct cwd and receives a brief.
+6. Complete all performers with reports and validation results.
+7. Verify reviewer auto-spawns in `_review` with consolidated context.
+8. Restart Horizon and confirm the run, slot statuses, worktree paths, reports,
+   and reviewer link persist.
+9. Create a second run with one blocked slot and confirm the blocked decision
+   prompt appears.
+10. Delete one run and confirm only that run's scratch data is removed.
+
+## Regression Checklist
+
+- Slot worktree creation never writes into the source checkout.
+- Applying a slot diff to `_review` never mutates performer worktrees.
+- Empty diffs are accepted without changing `_review`.
+- Invalid diffs produce a visible failure and leave `_review` unchanged.
+- Restarting Horizon does not duplicate existing performer or reviewer panels.
+- Deleting a run removes only that run's scratch worktrees.
+- Dashboard state always matches `squad.json`.
+- Toolbar and command palette open the same Squad surface.
+- Squad overlays do not sit behind foreground canvas helpers.
+- Text and controls do not overlap at 1280x800 or 1728x1117.
+
+## PR Evidence Checklist
+
+- Exact commit SHA tested.
+- Terminal output for the shared validation gate.
+- Focused test output for touched slice modules.
+- Screenshots for dashboard, composer, run lane, slot detail, and reviewer
+  states as the corresponding slices land.
+- Directory listing for `$HORIZON_HOME/squad-tmp`.
+- Redacted `squad.json`.
+- Any known smoke limitations, including skipped macOS checks and why.

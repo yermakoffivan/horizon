@@ -114,6 +114,7 @@ impl HorizonApp {
                     self.create_panel(ctx);
                 }
             }
+            CommandId::OpenSquad => self.open_agent_squad_dashboard(),
             CommandId::OpenRemoteHosts => self.toggle_remote_hosts_overlay(ctx),
             CommandId::ToggleSessions => self.toggle_session_manager(),
             CommandId::CreatePanelFromPreset(index) => {

@@ -22,6 +22,7 @@ pub enum CommandId {
 
     // Workspace / panel
     NewPanel,
+    OpenSquad,
     OpenRemoteHosts,
     ToggleSessions,
     CreatePanelFromPreset(usize),
@@ -61,11 +62,11 @@ pub struct CommandEntry {
     pub keywords: Vec<String>,
 }
 
-fn command_entry(id: CommandId, label: &str, shortcut: String, keywords: &[&str]) -> CommandEntry {
+fn command_entry(id: CommandId, label: &str, shortcut: Option<String>, keywords: &[&str]) -> CommandEntry {
     CommandEntry {
         id,
         label: label.into(),
-        shortcut: Some(shortcut),
+        shortcut,
         keywords: keywords.iter().map(|keyword| (*keyword).into()).collect(),
     }
 }
@@ -84,37 +85,43 @@ fn workspace_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Comm
         command_entry(
             CommandId::NewPanel,
             "New Panel",
-            shortcuts.new_terminal.display_label(primary_label),
+            Some(shortcuts.new_terminal.display_label(primary_label)),
             &["create", "terminal", "add"],
+        ),
+        command_entry(
+            CommandId::OpenSquad,
+            "Agent Squad",
+            None,
+            &["squad", "agent", "run", "fanout", "parallel"],
         ),
         command_entry(
             CommandId::FocusActiveWorkspace,
             "Focus Active Workspace",
-            shortcuts.focus_active_workspace.display_label(primary_label),
+            Some(shortcuts.focus_active_workspace.display_label(primary_label)),
             &["workspace", "focus", "pan", "center"],
         ),
         command_entry(
             CommandId::FitActiveWorkspace,
             "Fit Active Workspace",
-            shortcuts.fit_active_workspace.display_label(primary_label),
+            Some(shortcuts.fit_active_workspace.display_label(primary_label)),
             &["workspace", "fit", "zoom", "frame"],
         ),
         command_entry(
             CommandId::OpenRemoteHosts,
             "Remote Hosts",
-            shortcuts.open_remote_hosts.display_label(primary_label),
+            Some(shortcuts.open_remote_hosts.display_label(primary_label)),
             &["ssh", "tailscale", "remote", "hosts", "nodes"],
         ),
         command_entry(
             CommandId::ToggleSessions,
             "Sessions",
-            shortcuts.toggle_sessions.display_label(primary_label),
+            Some(shortcuts.toggle_sessions.display_label(primary_label)),
             &["session", "switch", "resume", "restore"],
         ),
         command_entry(
             CommandId::AlignWorkspacesHorizontally,
             "Align Workspaces",
-            shortcuts.align_workspaces_horizontally.display_label(primary_label),
+            Some(shortcuts.align_workspaces_horizontally.display_label(primary_label)),
             &["arrange", "horizontal", "layout", "row"],
         ),
     ]
@@ -125,49 +132,49 @@ fn view_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<CommandEn
         command_entry(
             CommandId::ToggleSidebar,
             "Toggle Sidebar",
-            shortcuts.toggle_sidebar.display_label(primary_label),
+            Some(shortcuts.toggle_sidebar.display_label(primary_label)),
             &["sidebar", "hide", "show"],
         ),
         command_entry(
             CommandId::ToggleHud,
             "Toggle HUD",
-            shortcuts.toggle_hud.display_label(primary_label),
+            Some(shortcuts.toggle_hud.display_label(primary_label)),
             &["heads", "up", "display", "info"],
         ),
         command_entry(
             CommandId::ToggleMinimap,
             "Toggle Minimap",
-            shortcuts.toggle_minimap.display_label(primary_label),
+            Some(shortcuts.toggle_minimap.display_label(primary_label)),
             &["overview", "map"],
         ),
         command_entry(
             CommandId::ToggleFullscreenWindow,
             "Toggle Fullscreen (Window)",
-            shortcuts.fullscreen_window.display_label(primary_label),
+            Some(shortcuts.fullscreen_window.display_label(primary_label)),
             &["maximize", "window", "fullscreen"],
         ),
         command_entry(
             CommandId::ToggleFullscreenPanel,
             "Toggle Fullscreen (Panel)",
-            shortcuts.fullscreen_panel.display_label(primary_label),
+            Some(shortcuts.fullscreen_panel.display_label(primary_label)),
             &["maximize", "panel", "fullscreen", "focus"],
         ),
         command_entry(
             CommandId::ZoomReset,
             "Reset Zoom",
-            shortcuts.zoom_reset.display_label(primary_label),
+            Some(shortcuts.zoom_reset.display_label(primary_label)),
             &["zoom", "reset", "100", "percent"],
         ),
         command_entry(
             CommandId::ZoomIn,
             "Zoom In",
-            shortcuts.zoom_in.display_label(primary_label),
+            Some(shortcuts.zoom_in.display_label(primary_label)),
             &["zoom", "bigger", "enlarge"],
         ),
         command_entry(
             CommandId::ZoomOut,
             "Zoom Out",
-            shortcuts.zoom_out.display_label(primary_label),
+            Some(shortcuts.zoom_out.display_label(primary_label)),
             &["zoom", "smaller", "shrink"],
         ),
     ]
@@ -178,13 +185,13 @@ fn global_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Command
         command_entry(
             CommandId::ToggleSettings,
             "Settings",
-            shortcuts.toggle_settings.display_label(primary_label),
+            Some(shortcuts.toggle_settings.display_label(primary_label)),
             &["settings", "config", "preferences"],
         ),
         command_entry(
             CommandId::ToggleSearch,
             "Search Terminals",
-            shortcuts.search.display_label(primary_label),
+            Some(shortcuts.search.display_label(primary_label)),
             &["find", "search", "grep", "text"],
         ),
     ]
@@ -209,8 +216,23 @@ mod tests {
     #[test]
     fn action_commands_all_have_shortcuts() {
         for entry in action_commands(&AppShortcuts::default(), "Ctrl") {
-            assert!(entry.shortcut.is_some(), "entry '{}' has no shortcut", entry.label);
+            if entry.id != CommandId::OpenSquad {
+                assert!(entry.shortcut.is_some(), "entry '{}' has no shortcut", entry.label);
+            }
         }
+    }
+
+    #[test]
+    fn action_commands_include_agent_squad() {
+        let entries = action_commands(&AppShortcuts::default(), "Ctrl");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.id == CommandId::OpenSquad)
+            .expect("agent squad command");
+
+        assert_eq!(entry.label, "Agent Squad");
+        assert_eq!(entry.shortcut, None);
+        assert!(entry.keywords.iter().any(|keyword| keyword == "parallel"));
     }
 
     #[test]
