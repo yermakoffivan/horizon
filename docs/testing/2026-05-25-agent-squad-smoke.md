@@ -212,7 +212,8 @@ Scope:
 
 Manual smoke:
 
-1. Launch Horizon with the disposable repository as the active panel cwd.
+1. Launch Horizon with the disposable repository as the active workspace or
+   panel cwd.
 2. Open Squad composer from the toolbar.
 3. Enter a goal that can be split into three independent file edits.
 4. Set performers to three and keep worktree isolation.
@@ -232,6 +233,8 @@ Manual smoke:
 Expected:
 
 - Performer worktrees never share the same directory.
+- Start Run fails visibly if there is no active source checkout for the current
+  workspace.
 - The primary checkout remains clean unless the user edits it directly.
 - Slot chips show queued, working, done, and blocked states correctly.
 - Manual status changes persist immediately.

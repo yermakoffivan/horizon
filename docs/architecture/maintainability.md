@@ -42,6 +42,9 @@ back into large multi-purpose modules.
   - `lifecycle`: frame orchestration, shutdown flow, and repaint pacing
   - `panel_chrome`: panel titlebar chrome, badges, context menus, and rename UI
   - `panels`: panel-area orchestration and body rendering
+  - `squad`: Agent Squad overlay state/action dispatch, composer/dashboard/run
+    lane rendering, and UI-only fanout controls; worktree, persistence, and
+    domain transitions stay in `horizon-core` and `session_store`
   - `remote_hosts_overlay`: overlay state/input shell with query/filter,
     layout, and row/header paint helpers split into `remote_hosts_overlay/`
   - `sidebar`: sidebar rendering and deferred sidebar actions

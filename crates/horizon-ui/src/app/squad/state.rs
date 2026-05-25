@@ -4,12 +4,14 @@ use horizon_core::PanelKind;
 pub(super) enum SquadView {
     Dashboard,
     Composer,
+    RunLane { run_id: String },
 }
 
 #[derive(Clone, Debug)]
 pub(in crate::app) struct SquadPanelState {
     pub(super) view: SquadView,
     pub(super) composer: SquadComposerState,
+    pub(super) error_message: Option<String>,
 }
 
 impl SquadPanelState {
@@ -17,6 +19,7 @@ impl SquadPanelState {
         Self {
             view: SquadView::Dashboard,
             composer: SquadComposerState::default(),
+            error_message: None,
         }
     }
 
@@ -24,6 +27,7 @@ impl SquadPanelState {
         Self {
             view: SquadView::Composer,
             composer: SquadComposerState::default(),
+            error_message: None,
         }
     }
 }

@@ -25,7 +25,7 @@ pub(super) fn render_dashboard(ui: &mut egui::Ui, squad: &AgentSquad) -> SquadAc
     }
 
     egui::Grid::new("agent_squad_dashboard_grid")
-        .num_columns(5)
+        .num_columns(6)
         .spacing([18.0, 8.0])
         .striped(true)
         .show(ui, |ui| {
@@ -34,6 +34,7 @@ pub(super) fn render_dashboard(ui: &mut egui::Ui, squad: &AgentSquad) -> SquadAc
             header(ui, "Roles");
             header(ui, "Status");
             header(ui, "Progress");
+            header(ui, "");
             ui.end_row();
 
             for run in squad.runs.iter().rev() {
@@ -42,6 +43,9 @@ pub(super) fn render_dashboard(ui: &mut egui::Ui, squad: &AgentSquad) -> SquadAc
                 ui.label(RichText::new(role_summary(run)).color(theme::FG_DIM()));
                 ui.label(status_text(run.status));
                 ui.label(RichText::new(progress_text(run)).monospace().color(theme::FG_SOFT()));
+                if ui.add(util::chrome_button("Open")).clicked() {
+                    action = SquadAction::OpenRun(run.id.clone());
+                }
                 ui.end_row();
             }
         });

@@ -1,12 +1,16 @@
 mod composer;
 mod dashboard;
+mod lane;
 mod render;
 mod state;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use horizon_core::{AgentPanelLink, AgentSquad, PerformerSlot, WorkItem, WorkStatus};
+use horizon_core::{
+    AgentPanelLink, AgentSquad, PanelKind, PanelOptions, PanelResume, PerformerReport, PerformerSlot, WorkItem,
+    WorkStatus, WorkspaceId, WorktreeManager,
+};
 
 use self::render::render_agent_squad;
 pub(super) use self::state::SquadPanelState;
@@ -19,7 +23,28 @@ enum SquadAction {
     Close,
     Dashboard,
     NewRun,
+    OpenRun(String),
+    FocusPanel(String),
     StartRun(SquadRunDraft),
+    MarkSlotDone { run_id: String, slot_id: String },
+    MarkSlotBlocked { run_id: String, slot_id: String },
+}
+
+struct CreatedSquadRun {
+    run_id: String,
+    slots: Vec<CreatedPerformerSlot>,
+}
+
+struct CreatedPerformerSlot {
+    slot_id: String,
+    kind: PanelKind,
+    scratch: PathBuf,
+    prompt: String,
+}
+
+struct SpawnedSlot {
+    slot_id: String,
+    panel_local_id: String,
 }
 
 impl HorizonApp {
@@ -45,48 +70,214 @@ impl HorizonApp {
         };
 
         let action = render_agent_squad(ctx, state, &self.agent_squad);
-        self.apply_squad_action(action);
+        self.apply_squad_action(ctx, action);
     }
 
-    fn apply_squad_action(&mut self, action: SquadAction) {
+    fn apply_squad_action(&mut self, ctx: &egui::Context, action: SquadAction) {
         match action {
             SquadAction::None => {}
             SquadAction::Close => self.squad_panel = None,
             SquadAction::Dashboard => {
                 if let Some(state) = &mut self.squad_panel {
                     state.view = SquadView::Dashboard;
+                    state.error_message = None;
                 }
             }
             SquadAction::NewRun => {
                 self.squad_panel = Some(SquadPanelState::composer());
             }
-            SquadAction::StartRun(draft) => {
-                self.create_stub_squad_run(&draft);
+            SquadAction::OpenRun(run_id) => {
                 if let Some(state) = &mut self.squad_panel {
-                    state.view = SquadView::Dashboard;
-                    state.composer.goal.clear();
+                    state.view = SquadView::RunLane { run_id };
+                    state.error_message = None;
                 }
             }
+            SquadAction::FocusPanel(panel_local_id) => {
+                self.focus_squad_panel(ctx, &panel_local_id);
+            }
+            SquadAction::StartRun(draft) => match self.start_squad_run(ctx, &draft) {
+                Ok(run_id) => {
+                    if let Some(state) = &mut self.squad_panel {
+                        state.view = SquadView::RunLane { run_id };
+                        state.composer.goal.clear();
+                        state.error_message = None;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!("failed to start Agent Squad run: {error}");
+                    if let Some(state) = &mut self.squad_panel {
+                        state.error_message = Some(error.to_string());
+                    }
+                }
+            },
+            SquadAction::MarkSlotDone { run_id, slot_id } => self.mark_squad_slot_done(&run_id, &slot_id),
+            SquadAction::MarkSlotBlocked { run_id, slot_id } => self.mark_squad_slot_blocked(&run_id, &slot_id),
         }
     }
 
-    fn create_stub_squad_run(&mut self, draft: &SquadRunDraft) {
+    fn start_squad_run(&mut self, ctx: &egui::Context, draft: &SquadRunDraft) -> horizon_core::Result<String> {
+        let workspace_id = self.ensure_workspace_visible(ctx);
+        let source_repo = self.squad_source_repo(workspace_id)?;
         let scratch_root = self.session_store.home().root().join("squad-tmp");
         let now = current_unix_millis();
-        let result = self.update_agent_squad(|squad| {
+        let mut created_paths = Vec::new();
+        let mut created_run = None;
+
+        let create_result = self.update_agent_squad(|squad| {
             let run = squad.create_run(draft.goal.clone(), now);
             run.start_decomposing(AgentPanelLink::new(draft.researcher_kind, None));
             run.reviewer = Some(AgentPanelLink::new(draft.reviewer_kind, None));
+            let run_id = run.id.clone();
             let run_scratch_root = scratch_root.join(&run.id);
-            run.set_primary_worktree(run_scratch_root.join("_review"));
-            let performers = stub_performer_slots(draft, &run_scratch_root);
-            run.queue_plan(String::new(), performers);
+            let primary_worktree = WorktreeManager::create(&source_repo, "HEAD", &run_scratch_root, "_review")?;
+            created_paths.push(primary_worktree.clone());
+            let performers = create_performer_slots(draft, &source_repo, &run_scratch_root, &mut created_paths)?;
+            let slots = performers
+                .iter()
+                .map(|slot| CreatedPerformerSlot {
+                    slot_id: slot.id.clone(),
+                    kind: slot.assigned_kind,
+                    scratch: slot.scratch.clone(),
+                    prompt: performer_prompt(&run_id, draft, slot),
+                })
+                .collect();
+            run.set_primary_worktree(primary_worktree);
+            run.queue_plan(plan_text(draft), performers);
+            created_run = Some(CreatedSquadRun { run_id, slots });
             Ok(())
         });
 
-        if let Err(error) = result {
-            tracing::warn!("failed to persist Agent Squad run: {error}");
+        if let Err(error) = create_result {
+            cleanup_created_worktrees(&created_paths);
+            return Err(error);
         }
+
+        let created_run =
+            created_run.ok_or_else(|| horizon_core::Error::State("squad run was not created".to_string()))?;
+        let spawned = match self.spawn_squad_performers(workspace_id, &created_run) {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                self.fail_squad_run(&created_run.run_id, error.to_string());
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.dispatch_squad_slots(&created_run.run_id, &spawned) {
+            self.fail_squad_run(&created_run.run_id, error.to_string());
+            return Err(error);
+        }
+        self.mark_runtime_dirty();
+        Ok(created_run.run_id)
+    }
+
+    fn spawn_squad_performers(
+        &mut self,
+        workspace_id: WorkspaceId,
+        run: &CreatedSquadRun,
+    ) -> horizon_core::Result<Vec<SpawnedSlot>> {
+        let mut spawned = Vec::with_capacity(run.slots.len());
+        for slot in &run.slots {
+            let options = PanelOptions {
+                name: Some(format!("Squad {} {}", short_run_id(&run.run_id), slot.slot_id)),
+                cwd: Some(slot.scratch.clone()),
+                kind: slot.kind,
+                resume: PanelResume::Fresh,
+                ..PanelOptions::default()
+            };
+            let panel_id = self.create_panel_with_options(options, workspace_id)?;
+            let panel = self
+                .board
+                .panel_mut(panel_id)
+                .ok_or_else(|| horizon_core::Error::State(format!("panel {} was not created", panel_id.0)))?;
+            panel.write_input(slot.prompt.as_bytes());
+            spawned.push(SpawnedSlot {
+                slot_id: slot.slot_id.clone(),
+                panel_local_id: panel.local_id.clone(),
+            });
+        }
+        Ok(spawned)
+    }
+
+    fn dispatch_squad_slots(&mut self, run_id: &str, spawned: &[SpawnedSlot]) -> horizon_core::Result<()> {
+        self.update_agent_squad(|squad| {
+            let run = squad.run_mut(run_id)?;
+            for slot in spawned {
+                run.dispatch_slot(&slot.slot_id, slot.panel_local_id.clone())?;
+            }
+            Ok(())
+        })
+    }
+
+    fn focus_squad_panel(&mut self, ctx: &egui::Context, panel_local_id: &str) {
+        let Some(panel_id) = self.board.panel_id_by_local_id(panel_local_id) else {
+            return;
+        };
+        self.board.focus(panel_id);
+        if let Some(workspace_id) = self.board.panel_workspace_id(panel_id)
+            && let Some((min, max)) = self.board.workspace_bounds(workspace_id)
+        {
+            self.focus_workspace_bounds(ctx, min, max, true);
+        }
+    }
+
+    fn mark_squad_slot_done(&mut self, run_id: &str, slot_id: &str) {
+        if let Err(error) = self.update_agent_squad(|squad| {
+            squad.run_mut(run_id)?.mark_slot_done(
+                slot_id,
+                PerformerReport {
+                    summary: "Marked done manually from the Squad lane.".to_string(),
+                    validation_result: "Manual status update.".to_string(),
+                    ..PerformerReport::default()
+                },
+            )
+        }) {
+            tracing::warn!("failed to mark Squad slot done: {error}");
+        }
+    }
+
+    fn mark_squad_slot_blocked(&mut self, run_id: &str, slot_id: &str) {
+        if let Err(error) = self.update_agent_squad(|squad| {
+            squad
+                .run_mut(run_id)?
+                .mark_slot_blocked(slot_id, "Marked blocked manually from the Squad lane.")
+        }) {
+            tracing::warn!("failed to mark Squad slot blocked: {error}");
+        }
+    }
+
+    fn fail_squad_run(&mut self, run_id: &str, reason: String) {
+        if let Err(error) = self.update_agent_squad(|squad| {
+            squad.run_mut(run_id)?.fail(reason);
+            Ok(())
+        }) {
+            tracing::warn!("failed to persist failed Squad run: {error}");
+        }
+    }
+
+    fn squad_source_repo(&self, workspace_id: WorkspaceId) -> horizon_core::Result<PathBuf> {
+        if let Some(panel_id) = self.board.focused
+            && self.board.panel_workspace_id(panel_id) == Some(workspace_id)
+            && let Some(cwd) = self.board.panel(panel_id).and_then(|panel| panel.launch_cwd.clone())
+        {
+            return Ok(cwd);
+        }
+        if let Some(cwd) = self
+            .board
+            .workspace(workspace_id)
+            .and_then(|workspace| workspace.cwd.clone())
+        {
+            return Ok(cwd);
+        }
+        if let Some(cwd) = self
+            .board
+            .workspace(workspace_id)
+            .and_then(|workspace| workspace.panels.iter().find_map(|panel_id| self.board.panel(*panel_id)))
+            .and_then(|panel| panel.launch_cwd.clone())
+        {
+            return Ok(cwd);
+        }
+        Err(horizon_core::Error::State(
+            "Agent Squad needs an active workspace or panel directory inside a Git repository".to_string(),
+        ))
     }
 
     fn update_agent_squad<F>(&mut self, update: F) -> horizon_core::Result<()>
@@ -105,25 +296,87 @@ impl HorizonApp {
     }
 }
 
-fn stub_performer_slots(draft: &SquadRunDraft, scratch_root: &Path) -> Vec<PerformerSlot> {
+fn create_performer_slots(
+    draft: &SquadRunDraft,
+    source_repo: &Path,
+    scratch_root: &Path,
+    created_paths: &mut Vec<PathBuf>,
+) -> horizon_core::Result<Vec<PerformerSlot>> {
     (1..=draft.performer_count)
         .map(|index| {
             let slot_id = format!("s{index}");
+            let scratch = WorktreeManager::create(source_repo, "HEAD", scratch_root, &slot_id)?;
+            created_paths.push(scratch.clone());
             let work_item = WorkItem {
                 id: slot_id.clone(),
-                title: format!("Slot {index}"),
-                request: draft.goal.clone(),
+                title: format!("Slot {index}: {}", truncated_goal(&draft.goal)),
+                request: slot_request(draft, index),
+                acceptance_criteria: vec![
+                    "Keep the change isolated to this slot's worktree.".to_string(),
+                    "Run the most relevant validation available for the touched files.".to_string(),
+                    "Report summary, validation, and any follow-up before marking done.".to_string(),
+                ],
                 status: WorkStatus::Queued,
                 ..WorkItem::default()
             };
-            PerformerSlot::new(
-                slot_id.clone(),
-                work_item,
-                draft.performer_kind,
-                scratch_root.join(&slot_id),
-            )
+            Ok(PerformerSlot::new(slot_id, work_item, draft.performer_kind, scratch))
         })
         .collect()
+}
+
+fn cleanup_created_worktrees(paths: &[PathBuf]) {
+    for path in paths.iter().rev() {
+        if let Err(error) = WorktreeManager::remove(path) {
+            tracing::warn!(path = %path.display(), "failed to clean up Squad worktree after start failure: {error}");
+        }
+    }
+}
+
+fn slot_request(draft: &SquadRunDraft, index: usize) -> String {
+    format!(
+        "Work independently on performer slot {index} for this goal:\n\n{}",
+        draft.goal
+    )
+}
+
+fn plan_text(draft: &SquadRunDraft) -> String {
+    (1..=draft.performer_count)
+        .map(|index| format!("{index}. {}", slot_request(draft, index).replace('\n', " ")))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn performer_prompt(run_id: &str, draft: &SquadRunDraft, slot: &PerformerSlot) -> String {
+    let criteria = slot
+        .work_item
+        .acceptance_criteria
+        .iter()
+        .map(|criterion| format!("- {criterion}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "You are Agent Squad performer {slot_id} for run {run_short}.\n\nGoal:\n{goal}\n\nWork item:\n{title}\n\nRequest:\n{request}\n\nAcceptance criteria:\n{criteria}\n\nWhen finished, leave a concise report with summary, validation, and follow-up.\n",
+        slot_id = slot.id,
+        run_short = short_run_id(run_id),
+        goal = draft.goal,
+        title = slot.work_item.title,
+        request = slot.work_item.request,
+        criteria = criteria,
+    )
+}
+
+fn truncated_goal(goal: &str) -> String {
+    let trimmed = goal.trim();
+    if trimmed.chars().count() <= 42 {
+        return trimmed.to_string();
+    }
+    let mut value = trimmed.chars().take(39).collect::<String>();
+    value.push_str("...");
+    value
+}
+
+fn short_run_id(run_id: &str) -> String {
+    run_id.get(..4).unwrap_or(run_id).to_string()
 }
 
 fn current_unix_millis() -> i64 {
