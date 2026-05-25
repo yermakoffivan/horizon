@@ -31,7 +31,7 @@ mod view;
 mod workspace;
 
 pub use agent_pair::{
-    AgentPairQueue, AgentPairRole, AgentPanelLink, FindingCard, FindingStatus, RegressionEvidencePacket,
+    AgentPairQueue, AgentPairRole, AgentPanelLink, AgentWorkItem, PerformerWorkReport, WorkItemStatus,
 };
 pub use agents::{AgentDefinition, AgentIntegrationKind, AgentResumeMode, agent_definition, all_agent_kinds};
 pub use alacritty_terminal::index::Side as TerminalSide;

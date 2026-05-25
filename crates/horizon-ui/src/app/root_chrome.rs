@@ -21,7 +21,7 @@ pub(super) const SIDEBAR_MIN_WIDTH: f32 = 168.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ToolbarAction {
     QuickNav,
-    ReviewQueue,
+    AgentPair,
     RemoteHosts,
     Sessions,
     Update,
@@ -29,12 +29,12 @@ pub(super) enum ToolbarAction {
 }
 
 impl ToolbarAction {
-    const SECONDARY: [Self; 2] = [Self::ReviewQueue, Self::RemoteHosts];
+    const SECONDARY: [Self; 2] = [Self::AgentPair, Self::RemoteHosts];
 
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::QuickNav => "Quick Nav",
-            Self::ReviewQueue => "Review Queue",
+            Self::AgentPair => "Agent Pair",
             Self::RemoteHosts => "Remote Hosts",
             Self::Sessions => "Sessions",
             Self::Update => "Update",
@@ -235,7 +235,7 @@ mod tests {
         assert!(
             layout
                 .visible_items
-                .contains(&ToolbarItem::Action(ToolbarAction::ReviewQueue))
+                .contains(&ToolbarItem::Action(ToolbarAction::AgentPair))
         );
         assert!(layout.search_rect.width() >= 180.0);
     }
@@ -248,7 +248,7 @@ mod tests {
         assert!(!layout.show_tagline);
         assert_eq!(
             layout.overflow_actions,
-            vec![ToolbarAction::ReviewQueue, ToolbarAction::RemoteHosts]
+            vec![ToolbarAction::AgentPair, ToolbarAction::RemoteHosts]
         );
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(layout.visible_items.contains(&ToolbarItem::OverflowMenu));
@@ -289,7 +289,7 @@ mod tests {
         );
         assert_eq!(
             layout.overflow_actions,
-            vec![ToolbarAction::ReviewQueue, ToolbarAction::RemoteHosts]
+            vec![ToolbarAction::AgentPair, ToolbarAction::RemoteHosts]
         );
     }
 }

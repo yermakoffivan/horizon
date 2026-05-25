@@ -28,7 +28,7 @@ pub enum CommandId {
 
     // Settings
     ToggleSettings,
-    OpenReviewQueue,
+    OpenAgentPair,
 
     // Search
     ToggleSearch,
@@ -192,9 +192,9 @@ fn global_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Command
             &["settings", "config", "preferences"],
         ),
         command_entry_without_shortcut(
-            CommandId::OpenReviewQueue,
-            "Review Queue",
-            &["review", "queue", "agent", "pair", "findings", "handoff"],
+            CommandId::OpenAgentPair,
+            "Agent Pair",
+            &["agent", "pair", "queue", "researcher", "performer", "plan", "handoff"],
         ),
         command_entry(
             CommandId::ToggleSearch,
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn action_commands_have_shortcuts_unless_intentionally_global() {
         for entry in action_commands(&AppShortcuts::default(), "Ctrl") {
-            if entry.id == CommandId::OpenReviewQueue {
+            if entry.id == CommandId::OpenAgentPair {
                 assert!(entry.shortcut.is_none());
             } else {
                 assert!(entry.shortcut.is_some(), "entry '{}' has no shortcut", entry.label);
@@ -233,15 +233,15 @@ mod tests {
     }
 
     #[test]
-    fn action_commands_include_review_queue() {
+    fn action_commands_include_agent_pair() {
         let entries = action_commands(&AppShortcuts::default(), "Ctrl");
         let entry = entries
             .iter()
-            .find(|entry| entry.id == CommandId::OpenReviewQueue)
-            .expect("review queue command");
+            .find(|entry| entry.id == CommandId::OpenAgentPair)
+            .expect("agent pair command");
 
-        assert_eq!(entry.label, "Review Queue");
-        assert!(entry.keywords.iter().any(|keyword| keyword == "handoff"));
+        assert_eq!(entry.label, "Agent Pair");
+        assert!(entry.keywords.iter().any(|keyword| keyword == "performer"));
     }
 
     #[test]

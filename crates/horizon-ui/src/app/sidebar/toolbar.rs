@@ -182,7 +182,7 @@ impl HorizonApp {
                     response
                 }
             }
-            ToolbarAction::ReviewQueue | ToolbarAction::Sessions | ToolbarAction::Settings => ui.add(
+            ToolbarAction::AgentPair | ToolbarAction::Sessions | ToolbarAction::Settings => ui.add(
                 util::chrome_button(action.label())
                     .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
             ),
@@ -217,7 +217,7 @@ impl HorizonApp {
     fn perform_toolbar_action(&mut self, ctx: &Context, action: ToolbarAction) {
         match action {
             ToolbarAction::QuickNav => self.open_command_palette(),
-            ToolbarAction::ReviewQueue => self.toggle_agent_pair_review_queue(),
+            ToolbarAction::AgentPair => self.toggle_agent_pair_review_queue(),
             ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
             ToolbarAction::Sessions => self.toggle_session_manager(),
             ToolbarAction::Update => self.open_available_update(),
@@ -233,7 +233,7 @@ fn fps_meter_width() -> f32 {
 fn action_button_width(action: ToolbarAction) -> f32 {
     match action {
         ToolbarAction::QuickNav => 102.0,
-        ToolbarAction::ReviewQueue => 122.0,
+        ToolbarAction::AgentPair => 104.0,
         ToolbarAction::RemoteHosts => 120.0,
         ToolbarAction::Sessions => 94.0,
         ToolbarAction::Update => 84.0,
@@ -273,13 +273,13 @@ mod tests {
     }
 
     #[test]
-    fn review_queue_toolbar_action_opens_queue_state() {
+    fn agent_pair_toolbar_action_opens_queue_state() {
         let ctx = Context::default();
         let mut app = test_app();
 
         assert!(!app.agent_pair_review_queue_open);
 
-        app.perform_toolbar_action(&ctx, ToolbarAction::ReviewQueue);
+        app.perform_toolbar_action(&ctx, ToolbarAction::AgentPair);
 
         assert!(app.agent_pair_review_queue_open);
     }

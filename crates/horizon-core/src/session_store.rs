@@ -241,7 +241,7 @@ impl SessionStore {
         Ok(())
     }
 
-    /// Load the Review Queue for a saved session.
+    /// Load the Agent Pair collaboration state for a saved session.
     ///
     /// # Errors
     ///
@@ -259,7 +259,7 @@ impl SessionStore {
         Ok(queue)
     }
 
-    /// Persist the Review Queue for a saved session.
+    /// Persist the Agent Pair collaboration state for a saved session.
     ///
     /// # Errors
     ///

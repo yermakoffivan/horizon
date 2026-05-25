@@ -1,5 +1,5 @@
 use super::{Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupDecision};
-use crate::agent_pair::{AgentPairQueue, AgentPairRole, FindingStatus, RegressionEvidencePacket};
+use crate::agent_pair::{AgentPairQueue, AgentPairRole, PerformerWorkReport, WorkItemStatus};
 
 #[test]
 fn empty_store_creates_new_session() {
@@ -99,26 +99,31 @@ fn delete_session_rejects_live_sessions() {
 }
 
 #[test]
-fn review_queue_defaults_to_empty_when_file_is_missing() {
-    let root = test_root("missing-review-queue");
+fn agent_pair_state_defaults_to_empty_when_file_is_missing() {
+    let root = test_root("missing-agent-pair");
     let home = HorizonHome::from_root(root);
     let store = SessionStore::new(home.clone(), home.config_path());
     let created = store.create_new_session(&Config::default()).expect("create session");
 
     let queue = store.load_agent_pair_queue(&created.session_id).expect("load queue");
 
-    assert!(queue.cards.is_empty());
+    assert!(queue.work_items.is_empty());
+    assert!(queue.goal.is_empty());
     assert!(queue.researcher.is_none());
     assert!(queue.performer.is_none());
 }
 
 #[test]
-fn review_queue_persists_cards_links_statuses_and_evidence() {
-    let root = test_root("persist-review-queue");
+fn agent_pair_state_persists_goal_links_work_status_report_and_plan() {
+    let root = test_root("persist-agent-pair");
     let home = HorizonHome::from_root(root);
     let store = SessionStore::new(home.clone(), home.config_path());
     let created = store.create_new_session(&Config::default()).expect("create session");
     let mut queue = AgentPairQueue::new();
+    queue
+        .set_goal("Plan a feature with a researcher and performer.")
+        .expect("goal");
+    queue.set_plan("Research first, queue execution work, then launch a fresh implementation session.");
     queue
         .link_panel(AgentPairRole::Researcher, "researcher-local-id")
         .expect("link researcher");
@@ -126,33 +131,34 @@ fn review_queue_persists_cards_links_statuses_and_evidence() {
         .link_panel(AgentPairRole::Performer, "performer-local-id")
         .expect("link performer");
     let id = queue
-        .create_candidate(
-            "Regression risk",
-            "Accepted finding should persist.",
-            "Review evidence.",
-            vec!["crates/horizon-core/src/session_store.rs".to_string()],
+        .queue_work_request(
+            "Prototype handoff",
+            "Create a performer prompt for the first implementation task.",
+            "The researcher identified the first slice.",
+            vec!["Prompt includes the shared goal.".to_string()],
             vec!["cargo test --workspace".to_string()],
         )
-        .expect("candidate");
-    queue.accept_candidate(&id).expect("accept");
+        .expect("work request");
     queue.dispatch_to_performer(&id).expect("dispatch");
     queue
-        .verify_with_evidence(
+        .complete_work(
             &id,
-            RegressionEvidencePacket {
-                verification_summary: "Verified after implementation.".to_string(),
+            PerformerWorkReport {
+                summary: "Generated and sent the prompt.".to_string(),
                 validation_commands: vec!["cargo test --workspace".to_string()],
                 validation_result: "Passed.".to_string(),
-                regression_scope: "Session persistence and dispatch.".to_string(),
+                follow_up: "Smoke the plan handoff UI.".to_string(),
             },
         )
-        .expect("verify");
+        .expect("complete");
 
     store
         .save_agent_pair_queue(&created.session_id, &queue)
         .expect("save queue");
     let loaded = store.load_agent_pair_queue(&created.session_id).expect("load queue");
 
+    assert_eq!(loaded.goal, "Plan a feature with a researcher and performer.");
+    assert!(loaded.plan.contains("launch a fresh implementation session"));
     assert_eq!(
         loaded
             .link_for(AgentPairRole::Researcher)
@@ -167,9 +173,9 @@ fn review_queue_persists_cards_links_statuses_and_evidence() {
             .panel_local_id,
         "performer-local-id"
     );
-    let card = loaded.card(&id).expect("card");
-    assert_eq!(card.status, FindingStatus::Verified);
-    assert!(card.regression_evidence.is_some());
+    let item = loaded.work_item(&id).expect("work item");
+    assert_eq!(item.status, WorkItemStatus::Done);
+    assert!(item.performer_report.is_some());
 }
 
 fn test_root(label: &str) -> std::path::PathBuf {

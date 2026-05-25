@@ -56,7 +56,7 @@ impl HorizonHome {
 
     #[must_use]
     pub fn session_agent_pair_queue_path(&self, session_id: &str) -> PathBuf {
-        self.session_dir(session_id).join("agent-pair-review-queue.json")
+        self.session_dir(session_id).join("agent-pair-collaboration.json")
     }
 
     #[must_use]
@@ -111,7 +111,7 @@ mod tests {
         );
         assert_eq!(
             home.session_agent_pair_queue_path("session-1"),
-            PathBuf::from("/tmp/horizon-home/sessions/session-1/agent-pair-review-queue.json")
+            PathBuf::from("/tmp/horizon-home/sessions/session-1/agent-pair-collaboration.json")
         );
         assert_eq!(
             home.session_transcripts_dir("session-1"),

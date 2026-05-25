@@ -39,7 +39,7 @@ use horizon_core::{
     SessionStore, ShutdownProgress, StartupChooser, StartupDecision, WindowConfig, WorkspaceId,
 };
 
-use self::agent_pair::AgentPairReviewQueueUiState;
+use self::agent_pair::AgentPairUiState;
 use self::canvas::CanvasGridCache;
 use super::command_palette::CommandPalette;
 use super::command_registry::CommandEntry;
@@ -209,7 +209,7 @@ pub struct HorizonApp {
     settings: Option<SettingsEditor>,
     session_manager: Option<RuntimeSessionManagerState>,
     agent_pair_queue: AgentPairQueue,
-    agent_pair_ui: AgentPairReviewQueueUiState,
+    agent_pair_ui: AgentPairUiState,
     agent_pair_review_queue_open: bool,
     managed_install: Option<ManagedInstall>,
     surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
@@ -358,7 +358,7 @@ impl HorizonApp {
             settings: None,
             session_manager: None,
             agent_pair_queue: AgentPairQueue::new(),
-            agent_pair_ui: AgentPairReviewQueueUiState::default(),
+            agent_pair_ui: AgentPairUiState::default(),
             agent_pair_review_queue_open: false,
             managed_install,
             surge_update_check_rx: None,

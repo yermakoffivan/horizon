@@ -126,7 +126,7 @@ impl HorizonApp {
                 }
             }
             CommandId::ToggleSettings => self.toggle_settings(),
-            CommandId::OpenReviewQueue => self.open_agent_pair_review_queue(),
+            CommandId::OpenAgentPair => self.open_agent_pair_review_queue(),
             CommandId::ToggleSearch => {
                 // Focus the toolbar search input (or create it with focus
                 // if it doesn't exist yet).
@@ -210,14 +210,14 @@ mod tests {
     }
 
     #[test]
-    fn review_queue_command_palette_action_opens_without_toggling_closed() {
+    fn agent_pair_command_palette_action_opens_without_toggling_closed() {
         let ctx = Context::default();
         let mut app = test_app();
 
-        app.execute_command(&ctx, &CommandId::OpenReviewQueue);
+        app.execute_command(&ctx, &CommandId::OpenAgentPair);
         assert!(app.agent_pair_review_queue_open);
 
-        app.execute_command(&ctx, &CommandId::OpenReviewQueue);
+        app.execute_command(&ctx, &CommandId::OpenAgentPair);
         assert!(app.agent_pair_review_queue_open);
     }
 }

@@ -1,148 +1,201 @@
-use super::{AgentPairQueue, AgentPairRole, FindingStatus, RegressionEvidencePacket};
+use super::{AgentPairQueue, AgentPairRole, PerformerWorkReport, WorkItemStatus};
 
-fn candidate_queue() -> (AgentPairQueue, String) {
+fn queue_with_goal() -> AgentPairQueue {
     let mut queue = AgentPairQueue::new();
+    queue
+        .set_goal("Plan a safer detached-window restore feature.")
+        .expect("goal");
+    queue
+}
+
+fn queue_with_work() -> (AgentPairQueue, String) {
+    let mut queue = queue_with_goal();
     let id = queue
-        .create_candidate(
-            "Crash on resize",
-            "Detached window snaps back during resize.",
-            "Observed in a native window trace.",
-            vec!["crates/horizon-ui/src/app/detached_viewports.rs".to_string()],
+        .queue_work_request(
+            "Inspect restore path",
+            "Trace runtime-state restore and identify where stale detached geometry is replayed.",
+            "The researcher saw a snap-back during relaunch.",
+            vec!["Name the exact restore seam.".to_string()],
             vec!["cargo test --workspace".to_string()],
         )
-        .expect("candidate");
+        .expect("work");
     (queue, id)
 }
 
-fn complete_packet() -> RegressionEvidencePacket {
-    RegressionEvidencePacket {
-        verification_summary: "Confirmed the resize path and fixed restore replay.".to_string(),
+fn complete_report() -> PerformerWorkReport {
+    PerformerWorkReport {
+        summary: "Confirmed the restore path and updated the stale replay guard.".to_string(),
         validation_commands: vec![
             "cargo test --workspace".to_string(),
             "cargo clippy --all-targets --all-features -- -D warnings".to_string(),
         ],
         validation_result: "All validation passed.".to_string(),
-        regression_scope: "Resize, relaunch restore, and detached focus paths.".to_string(),
+        follow_up: "Run native resize smoke on macOS.".to_string(),
     }
 }
 
 #[test]
-fn candidate_can_become_accepted() {
-    let (mut queue, id) = candidate_queue();
+fn research_goal_is_required_before_queueing_work() {
+    let mut queue = AgentPairQueue::new();
 
-    queue.accept_candidate(&id).expect("accept");
+    let error = queue
+        .queue_work_request("Inspect", "Find the seam.", "", Vec::new(), Vec::new())
+        .expect_err("goal should be required");
 
-    assert_eq!(queue.card(&id).expect("card").status, FindingStatus::Accepted);
+    assert!(error.to_string().contains("research goal"));
+    assert!(queue.work_items.is_empty());
 }
 
 #[test]
-fn candidate_can_become_rejected() {
-    let (mut queue, id) = candidate_queue();
+fn researcher_can_queue_performer_work() {
+    let (queue, id) = queue_with_work();
 
-    queue.reject_candidate(&id).expect("reject");
-
-    assert_eq!(queue.card(&id).expect("card").status, FindingStatus::Rejected);
+    let item = queue.work_item(&id).expect("work item");
+    assert_eq!(item.status, WorkItemStatus::Queued);
+    assert_eq!(item.requested_by, AgentPairRole::Researcher);
+    assert_eq!(item.acceptance_criteria, vec!["Name the exact restore seam."]);
 }
 
 #[test]
-fn accepted_can_dispatch_to_linked_performer() {
-    let (mut queue, id) = candidate_queue();
+fn queued_work_can_dispatch_to_linked_performer() {
+    let (mut queue, id) = queue_with_work();
     queue
         .link_panel(AgentPairRole::Performer, "performer-panel-local-id")
         .expect("link performer");
-    queue.accept_candidate(&id).expect("accept");
 
     let prompt = queue.dispatch_to_performer(&id).expect("dispatch");
 
-    let card = queue.card(&id).expect("card");
-    assert_eq!(card.status, FindingStatus::Implementing);
+    let item = queue.work_item(&id).expect("work item");
+    assert_eq!(item.status, WorkItemStatus::Dispatched);
     assert_eq!(
-        card.assigned_performer_panel_local_id.as_deref(),
+        item.assigned_performer_panel_local_id.as_deref(),
         Some("performer-panel-local-id")
     );
-    assert!(prompt.contains(&format!("Implement accepted finding {id}")));
+    assert!(prompt.contains(&format!("Execute work request {id}")));
 }
 
 #[test]
-fn candidate_rejected_and_verified_cards_cannot_dispatch() {
-    let (mut candidate, candidate_id) = candidate_queue();
-    candidate
+fn non_queued_work_cannot_dispatch() {
+    let (mut dispatched, dispatched_id) = queue_with_work();
+    dispatched
         .link_panel(AgentPairRole::Performer, "performer")
         .expect("link performer");
-    assert!(candidate.dispatch_to_performer(&candidate_id).is_err());
-    assert_eq!(
-        candidate.card(&candidate_id).expect("candidate").status,
-        FindingStatus::Candidate
-    );
+    dispatched.dispatch_to_performer(&dispatched_id).expect("dispatch");
+    assert!(dispatched.dispatch_to_performer(&dispatched_id).is_err());
 
-    let (mut rejected, rejected_id) = candidate_queue();
-    rejected
-        .link_panel(AgentPairRole::Performer, "performer")
+    let (mut done, done_id) = queue_with_work();
+    done.link_panel(AgentPairRole::Performer, "performer")
         .expect("link performer");
-    rejected.reject_candidate(&rejected_id).expect("reject");
-    assert!(rejected.dispatch_to_performer(&rejected_id).is_err());
-
-    let (mut verified, verified_id) = candidate_queue();
-    verified
-        .link_panel(AgentPairRole::Performer, "performer")
-        .expect("link performer");
-    verified.accept_candidate(&verified_id).expect("accept");
-    verified.dispatch_to_performer(&verified_id).expect("dispatch");
-    verified
-        .verify_with_evidence(&verified_id, complete_packet())
-        .expect("verify");
-    assert!(verified.dispatch_to_performer(&verified_id).is_err());
+    done.dispatch_to_performer(&done_id).expect("dispatch");
+    done.complete_work(&done_id, complete_report()).expect("complete");
+    assert!(done.dispatch_to_performer(&done_id).is_err());
 }
 
 #[test]
-fn implementing_can_become_verified_with_complete_evidence() {
-    let (mut queue, id) = candidate_queue();
+fn dispatched_work_can_be_completed_with_report() {
+    let (mut queue, id) = queue_with_work();
     queue
         .link_panel(AgentPairRole::Performer, "performer")
         .expect("link performer");
-    queue.accept_candidate(&id).expect("accept");
     queue.dispatch_to_performer(&id).expect("dispatch");
 
-    queue.verify_with_evidence(&id, complete_packet()).expect("verify");
+    queue.complete_work(&id, complete_report()).expect("complete");
 
-    let card = queue.card(&id).expect("card");
-    assert_eq!(card.status, FindingStatus::Verified);
-    assert!(card.regression_evidence.is_some());
+    let item = queue.work_item(&id).expect("work item");
+    assert_eq!(item.status, WorkItemStatus::Done);
+    assert!(item.performer_report.is_some());
 }
 
 #[test]
-fn incomplete_evidence_is_rejected() {
-    let (mut queue, id) = candidate_queue();
+fn incomplete_report_is_rejected() {
+    let (mut queue, id) = queue_with_work();
     queue
         .link_panel(AgentPairRole::Performer, "performer")
         .expect("link performer");
-    queue.accept_candidate(&id).expect("accept");
     queue.dispatch_to_performer(&id).expect("dispatch");
 
-    let packet = RegressionEvidencePacket {
-        verification_summary: "Confirmed".to_string(),
-        validation_commands: vec![],
+    let report = PerformerWorkReport {
+        summary: "Changed the guard.".to_string(),
+        validation_commands: Vec::new(),
         validation_result: "Passed".to_string(),
-        regression_scope: "Queue only".to_string(),
+        follow_up: String::new(),
     };
 
-    assert!(queue.verify_with_evidence(&id, packet).is_err());
-    assert_eq!(queue.card(&id).expect("card").status, FindingStatus::Implementing);
+    assert!(queue.complete_work(&id, report).is_err());
+    assert_eq!(
+        queue.work_item(&id).expect("work item").status,
+        WorkItemStatus::Dispatched
+    );
 }
 
 #[test]
-fn prompt_generation_includes_structured_finding_fields() {
-    let (queue, id) = candidate_queue();
-    let card = queue.card(&id).expect("card");
+fn dispatched_work_can_be_marked_blocked_with_summary() {
+    let (mut queue, id) = queue_with_work();
+    queue
+        .link_panel(AgentPairRole::Performer, "performer")
+        .expect("link performer");
+    queue.dispatch_to_performer(&id).expect("dispatch");
 
-    let prompt = card.performer_prompt();
+    queue
+        .block_work(
+            &id,
+            PerformerWorkReport {
+                summary: "Cannot reproduce without a native macOS window trace.".to_string(),
+                ..PerformerWorkReport::default()
+            },
+        )
+        .expect("block");
+
+    assert_eq!(queue.work_item(&id).expect("work item").status, WorkItemStatus::Blocked);
+}
+
+#[test]
+fn performer_prompt_includes_goal_and_structured_work_fields() {
+    let (queue, id) = queue_with_work();
+    let item = queue.work_item(&id).expect("work item");
+
+    let prompt = item.performer_prompt(&queue.goal);
 
     assert!(prompt.contains(&id));
-    assert!(prompt.contains("Crash on resize"));
-    assert!(prompt.contains("Detached window snaps back"));
-    assert!(prompt.contains("Observed in a native window trace"));
-    assert!(prompt.contains("crates/horizon-ui/src/app/detached_viewports.rs"));
+    assert!(prompt.contains("Plan a safer detached-window restore feature"));
+    assert!(prompt.contains("Inspect restore path"));
+    assert!(prompt.contains("Trace runtime-state restore"));
+    assert!(prompt.contains("The researcher saw a snap-back"));
+    assert!(prompt.contains("Name the exact restore seam"));
     assert!(prompt.contains("cargo test --workspace"));
+}
+
+#[test]
+fn plan_handoff_includes_goal_plan_and_queue_state() {
+    let (mut queue, id) = queue_with_work();
+    queue.set_plan("1. Inspect restore. 2. Patch stale replay. 3. Smoke macOS.");
+    queue
+        .link_panel(AgentPairRole::Performer, "performer")
+        .expect("link performer");
+    queue.dispatch_to_performer(&id).expect("dispatch");
+    queue.complete_work(&id, complete_report()).expect("complete");
+
+    let prompt = queue.plan_handoff_prompt();
+
+    assert!(prompt.contains("Plan a safer detached-window restore feature"));
+    assert!(prompt.contains("Patch stale replay"));
+    assert!(prompt.contains("Inspect restore path"));
+    assert!(prompt.contains("done"));
+    assert!(prompt.contains("Confirmed the restore path"));
+}
+
+#[test]
+fn startup_briefs_explain_agent_roles_and_goal() {
+    let queue = queue_with_goal();
+
+    let researcher = queue.researcher_brief_prompt();
+    let performer = queue.performer_brief_prompt();
+
+    assert!(researcher.contains("Researcher"));
+    assert!(researcher.contains("Title:"));
+    assert!(researcher.contains("Plan a safer detached-window restore feature"));
+    assert!(performer.contains("Performer"));
+    assert!(performer.contains("Wait for dispatched work requests"));
 }
 
 #[test]
