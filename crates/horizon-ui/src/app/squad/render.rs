@@ -7,6 +7,7 @@ use super::SquadAction;
 use super::composer::render_composer;
 use super::dashboard::render_dashboard;
 use super::lane::render_run_lane;
+use super::slot_detail::render_slot_detail;
 use super::state::{SquadPanelState, SquadView};
 
 pub(super) fn render_agent_squad(ctx: &egui::Context, state: &mut SquadPanelState, squad: &AgentSquad) -> SquadAction {
@@ -32,6 +33,13 @@ pub(super) fn render_agent_squad(ctx: &egui::Context, state: &mut SquadPanelStat
                 SquadView::Dashboard => render_dashboard(ui, squad),
                 SquadView::Composer => render_composer(ui, &mut state.composer),
                 SquadView::RunLane { run_id } => render_run_lane(ui, squad, run_id),
+                SquadView::SlotDetail => {
+                    if let Some(detail) = &mut state.slot_detail {
+                        render_slot_detail(ui, squad, detail)
+                    } else {
+                        SquadAction::Dashboard
+                    }
+                }
             };
             if !matches!(next, SquadAction::None) {
                 action = next;

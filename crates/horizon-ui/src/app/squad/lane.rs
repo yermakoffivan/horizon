@@ -5,6 +5,7 @@ use crate::app::util;
 use crate::theme;
 
 use super::SquadAction;
+use super::review::ready_for_blocked_decision;
 
 pub(super) fn render_run_lane(ui: &mut egui::Ui, squad: &AgentSquad, run_id: &str) -> SquadAction {
     let Some(run) = squad.runs.iter().find(|run| run.id == run_id) else {
@@ -37,6 +38,8 @@ pub(super) fn render_run_lane(ui: &mut egui::Ui, squad: &AgentSquad, run_id: &st
         render_researcher(ui, run);
         ui.add_space(10.0);
         render_performer_slots(ui, run, &mut action);
+        ui.add_space(10.0);
+        render_blocked_decision(ui, run, &mut action);
         ui.add_space(10.0);
         render_reviewer(ui, run);
     });
@@ -92,6 +95,25 @@ fn render_performer_slots(ui: &mut egui::Ui, run: &SquadRun, action: &mut SquadA
     });
 }
 
+fn render_blocked_decision(ui: &mut egui::Ui, run: &SquadRun, action: &mut SquadAction) {
+    if !ready_for_blocked_decision(run) {
+        return;
+    }
+
+    card_frame().show(ui, |ui| {
+        ui.label(
+            RichText::new("Blocked slots need a review decision")
+                .strong()
+                .color(theme::PALETTE_YELLOW()),
+        );
+        ui.label(RichText::new(waiting_summary(run)).color(theme::FG_SOFT()));
+        ui.add_space(8.0);
+        if ui.add(util::primary_button("Review Done Slots")).clicked() {
+            *action = SquadAction::ReviewDoneSlots(run.id.clone());
+        }
+    });
+}
+
 fn render_slot_card(ui: &mut egui::Ui, run: &SquadRun, slot: &PerformerSlot) -> SquadAction {
     let mut action = SquadAction::None;
     card_frame().show(ui, |ui| {
@@ -113,6 +135,12 @@ fn render_slot_card(ui: &mut egui::Ui, run: &SquadRun, slot: &PerformerSlot) -> 
         );
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
+            if ui.add(util::chrome_button("Details")).clicked() {
+                action = SquadAction::OpenSlot {
+                    run_id: run.id.clone(),
+                    slot_id: slot.id.clone(),
+                };
+            }
             if let Some(panel_local_id) = &slot.panel_local_id
                 && ui.add(util::chrome_button("Focus")).clicked()
             {
@@ -128,6 +156,7 @@ fn render_slot_card(ui: &mut egui::Ui, run: &SquadRun, slot: &PerformerSlot) -> 
                 action = SquadAction::MarkSlotBlocked {
                     run_id: run.id.clone(),
                     slot_id: slot.id.clone(),
+                    follow_up: "Marked blocked manually from the Squad lane.".to_string(),
                 };
             }
         });

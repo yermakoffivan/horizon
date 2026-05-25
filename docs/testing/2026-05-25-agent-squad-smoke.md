@@ -262,7 +262,8 @@ Manual smoke, all-done path:
 
 1. Start a three-performer run from the disposable repository.
 2. Make a distinct edit in each performer worktree.
-3. Mark each performer slot Done with a short report and validation command.
+3. Open each slot detail, use Refresh Diff, then mark each performer slot Done
+   with a short report and validation command.
 4. Confirm the reviewer panel auto-spawns only after the last Done transition.
 5. In the reviewer panel, run `pwd` and confirm it is `_review`.
 6. Confirm reviewer context includes:
@@ -276,15 +277,20 @@ Manual smoke, blocked path:
 
 1. Start another run with at least two performers.
 2. Mark one slot Blocked and all remaining slots Done.
-3. Confirm Horizon surfaces a skip-blocked or retry-blocked decision.
-4. Confirm the reviewer is not auto-spawned until the user chooses a path.
+3. Confirm Horizon surfaces the blocked decision banner in the run lane.
+4. Confirm the reviewer is not auto-spawned before the user chooses a path.
+5. Choose `Review Done Slots`.
+6. Confirm the reviewer starts from `_review` and the skipped blocked slot is
+   represented in reviewer context.
 
 Slot detail smoke:
 
 1. Open a slot from the run lane.
 2. Verify the detail surface shows status, panel link, scratch path, work item,
    performer report, diff, and reviewer notes.
-3. Use the slot detail `Focus` or equivalent action and verify it selects the
+3. Edit the report fields and verify `Mark Done` persists the report to
+   `squad.json`.
+4. Use the slot detail `Focus` or equivalent action and verify it selects the
    correct performer panel.
 
 Evidence:

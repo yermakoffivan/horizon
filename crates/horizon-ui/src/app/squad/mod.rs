@@ -2,6 +2,8 @@ mod composer;
 mod dashboard;
 mod lane;
 mod render;
+mod review;
+mod slot_detail;
 mod state;
 
 use std::path::{Path, PathBuf};
@@ -13,8 +15,12 @@ use horizon_core::{
 };
 
 use self::render::render_agent_squad;
+use self::review::{
+    apply_slot_diffs, blocked_slots, collect_review_contexts, ready_for_blocked_decision, ready_for_review,
+    reviewer_prompt,
+};
 pub(super) use self::state::SquadPanelState;
-use self::state::{SquadRunDraft, SquadView};
+use self::state::{SquadRunDraft, SquadSlotDetailState, SquadView};
 use super::HorizonApp;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,10 +30,28 @@ enum SquadAction {
     Dashboard,
     NewRun,
     OpenRun(String),
+    OpenSlot {
+        run_id: String,
+        slot_id: String,
+    },
+    RefreshSlotDetail,
     FocusPanel(String),
     StartRun(SquadRunDraft),
-    MarkSlotDone { run_id: String, slot_id: String },
-    MarkSlotBlocked { run_id: String, slot_id: String },
+    MarkSlotDone {
+        run_id: String,
+        slot_id: String,
+    },
+    MarkSlotDoneWithReport {
+        run_id: String,
+        slot_id: String,
+        report: PerformerReport,
+    },
+    MarkSlotBlocked {
+        run_id: String,
+        slot_id: String,
+        follow_up: String,
+    },
+    ReviewDoneSlots(String),
 }
 
 struct CreatedSquadRun {
@@ -51,6 +75,8 @@ impl HorizonApp {
     pub(super) fn open_agent_squad_dashboard(&mut self) {
         if let Some(state) = &mut self.squad_panel {
             state.view = SquadView::Dashboard;
+            state.slot_detail = None;
+            state.error_message = None;
         } else {
             self.squad_panel = Some(SquadPanelState::dashboard());
         }
@@ -80,6 +106,7 @@ impl HorizonApp {
             SquadAction::Dashboard => {
                 if let Some(state) = &mut self.squad_panel {
                     state.view = SquadView::Dashboard;
+                    state.slot_detail = None;
                     state.error_message = None;
                 }
             }
@@ -89,9 +116,12 @@ impl HorizonApp {
             SquadAction::OpenRun(run_id) => {
                 if let Some(state) = &mut self.squad_panel {
                     state.view = SquadView::RunLane { run_id };
+                    state.slot_detail = None;
                     state.error_message = None;
                 }
             }
+            SquadAction::OpenSlot { run_id, slot_id } => self.open_squad_slot_detail(&run_id, &slot_id),
+            SquadAction::RefreshSlotDetail => self.refresh_squad_slot_detail(),
             SquadAction::FocusPanel(panel_local_id) => {
                 self.focus_squad_panel(ctx, &panel_local_id);
             }
@@ -100,6 +130,7 @@ impl HorizonApp {
                     if let Some(state) = &mut self.squad_panel {
                         state.view = SquadView::RunLane { run_id };
                         state.composer.goal.clear();
+                        state.slot_detail = None;
                         state.error_message = None;
                     }
                 }
@@ -110,8 +141,27 @@ impl HorizonApp {
                     }
                 }
             },
-            SquadAction::MarkSlotDone { run_id, slot_id } => self.mark_squad_slot_done(&run_id, &slot_id),
-            SquadAction::MarkSlotBlocked { run_id, slot_id } => self.mark_squad_slot_blocked(&run_id, &slot_id),
+            SquadAction::MarkSlotDone { run_id, slot_id } => self.mark_squad_slot_done(
+                ctx,
+                &run_id,
+                &slot_id,
+                PerformerReport {
+                    summary: "Marked done manually from the Squad lane.".to_string(),
+                    validation_result: "Manual status update.".to_string(),
+                    ..PerformerReport::default()
+                },
+            ),
+            SquadAction::MarkSlotDoneWithReport {
+                run_id,
+                slot_id,
+                report,
+            } => self.mark_squad_slot_done(ctx, &run_id, &slot_id, report),
+            SquadAction::MarkSlotBlocked {
+                run_id,
+                slot_id,
+                follow_up,
+            } => self.mark_squad_slot_blocked(&run_id, &slot_id, follow_up),
+            SquadAction::ReviewDoneSlots(run_id) => self.review_done_squad_slots(ctx, &run_id),
         }
     }
 
@@ -219,28 +269,215 @@ impl HorizonApp {
         }
     }
 
-    fn mark_squad_slot_done(&mut self, run_id: &str, slot_id: &str) {
-        if let Err(error) = self.update_agent_squad(|squad| {
-            squad.run_mut(run_id)?.mark_slot_done(
-                slot_id,
-                PerformerReport {
-                    summary: "Marked done manually from the Squad lane.".to_string(),
-                    validation_result: "Manual status update.".to_string(),
-                    ..PerformerReport::default()
-                },
-            )
-        }) {
-            tracing::warn!("failed to mark Squad slot done: {error}");
+    fn open_squad_slot_detail(&mut self, run_id: &str, slot_id: &str) {
+        match self.build_slot_detail_state(run_id, slot_id) {
+            Ok(detail) => {
+                if let Some(state) = &mut self.squad_panel {
+                    state.view = SquadView::SlotDetail;
+                    state.slot_detail = Some(detail);
+                    state.error_message = None;
+                }
+            }
+            Err(error) => self.set_squad_error(error.to_string()),
         }
     }
 
-    fn mark_squad_slot_blocked(&mut self, run_id: &str, slot_id: &str) {
-        if let Err(error) = self.update_agent_squad(|squad| {
-            squad
-                .run_mut(run_id)?
-                .mark_slot_blocked(slot_id, "Marked blocked manually from the Squad lane.")
-        }) {
+    fn refresh_squad_slot_detail(&mut self) {
+        let Some((run_id, slot_id)) = self.squad_panel.as_ref().and_then(|state| {
+            state
+                .slot_detail
+                .as_ref()
+                .map(|detail| (detail.run_id.clone(), detail.slot_id.clone()))
+        }) else {
+            return;
+        };
+        self.open_squad_slot_detail(&run_id, &slot_id);
+    }
+
+    fn build_slot_detail_state(&self, run_id: &str, slot_id: &str) -> horizon_core::Result<SquadSlotDetailState> {
+        let run = self
+            .agent_squad
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .ok_or_else(|| horizon_core::Error::State(format!("squad run {run_id} was not found")))?;
+        let slot = run
+            .performers
+            .iter()
+            .find(|slot| slot.id == slot_id)
+            .ok_or_else(|| horizon_core::Error::State(format!("performer slot {slot_id} was not found")))?;
+        let (diff, diff_error) = match WorktreeManager::diff(&slot.scratch) {
+            Ok(diff) => (diff, None),
+            Err(error) => (String::new(), Some(error.to_string())),
+        };
+        Ok(SquadSlotDetailState::from_slot(
+            run_id.to_string(),
+            slot,
+            diff,
+            diff_error,
+        ))
+    }
+
+    fn mark_squad_slot_done(&mut self, ctx: &egui::Context, run_id: &str, slot_id: &str, report: PerformerReport) {
+        if let Err(error) = self.update_agent_squad(|squad| squad.run_mut(run_id)?.mark_slot_done(slot_id, report)) {
+            tracing::warn!("failed to mark Squad slot done: {error}");
+            self.set_squad_error(error.to_string());
+            return;
+        }
+
+        if let Err(error) = self.maybe_start_squad_review(ctx, run_id) {
+            tracing::warn!("failed to start Squad review: {error}");
+            self.set_squad_error(error.to_string());
+        }
+    }
+
+    fn mark_squad_slot_blocked(&mut self, run_id: &str, slot_id: &str, follow_up: String) {
+        if let Err(error) =
+            self.update_agent_squad(|squad| squad.run_mut(run_id)?.mark_slot_blocked(slot_id, follow_up))
+        {
             tracing::warn!("failed to mark Squad slot blocked: {error}");
+            self.set_squad_error(error.to_string());
+            return;
+        }
+
+        if let Some(run) = self.agent_squad.runs.iter().find(|run| run.id == run_id)
+            && ready_for_blocked_decision(run)
+        {
+            self.set_squad_error(blocked_review_message(run));
+        }
+    }
+
+    fn review_done_squad_slots(&mut self, ctx: &egui::Context, run_id: &str) {
+        let blocked_slot_ids = self
+            .agent_squad
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .map(|run| {
+                blocked_slots(run)
+                    .into_iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        if blocked_slot_ids.is_empty() {
+            return;
+        }
+
+        let result = self.update_agent_squad(|squad| {
+            let run = squad.run_mut(run_id)?;
+            for slot_id in &blocked_slot_ids {
+                run.mark_slot_done(
+                    slot_id,
+                    PerformerReport {
+                        summary: "Skipped blocked slot for reviewer pass.".to_string(),
+                        validation_result: "Skipped by manual review decision.".to_string(),
+                        follow_up: "Original slot was blocked; reviewer should inspect remaining context.".to_string(),
+                        ..PerformerReport::default()
+                    },
+                )?;
+            }
+            Ok(())
+        });
+
+        if let Err(error) = result {
+            tracing::warn!("failed to skip blocked Squad slots: {error}");
+            self.set_squad_error(error.to_string());
+            return;
+        }
+
+        if let Err(error) = self.maybe_start_squad_review(ctx, run_id) {
+            tracing::warn!("failed to start Squad review after skip: {error}");
+            self.set_squad_error(error.to_string());
+        }
+    }
+
+    fn maybe_start_squad_review(&mut self, ctx: &egui::Context, run_id: &str) -> horizon_core::Result<()> {
+        let Some(run) = self.agent_squad.runs.iter().find(|run| run.id == run_id).cloned() else {
+            return Err(horizon_core::Error::State(format!("squad run {run_id} was not found")));
+        };
+
+        if matches!(
+            run.status,
+            horizon_core::RunStatus::Reviewing | horizon_core::RunStatus::Done | horizon_core::RunStatus::Failed
+        ) {
+            self.clear_squad_error();
+            return Ok(());
+        }
+        if ready_for_blocked_decision(&run) {
+            self.set_squad_error(blocked_review_message(&run));
+            return Ok(());
+        }
+        if !ready_for_review(&run) {
+            self.clear_squad_error();
+            return Ok(());
+        }
+
+        self.start_squad_review(ctx, &run)
+    }
+
+    fn start_squad_review(&mut self, ctx: &egui::Context, run: &horizon_core::SquadRun) -> horizon_core::Result<()> {
+        let primary_worktree = run
+            .primary_worktree
+            .clone()
+            .ok_or_else(|| horizon_core::Error::State(format!("squad run {} has no review worktree", run.id)))?;
+        let contexts = collect_review_contexts(run)?;
+        apply_slot_diffs(&contexts, &primary_worktree)?;
+        let prompt = reviewer_prompt(run, &contexts);
+        let reviewer_kind = run.reviewer.as_ref().map_or(PanelKind::Claude, |link| link.kind);
+        let workspace_id = self
+            .squad_run_workspace_id(run)
+            .unwrap_or_else(|| self.ensure_workspace_visible(ctx));
+        let options = PanelOptions {
+            name: Some(format!("Squad {} review", short_run_id(&run.id))),
+            cwd: Some(primary_worktree),
+            kind: reviewer_kind,
+            resume: PanelResume::Fresh,
+            ..PanelOptions::default()
+        };
+        let panel_id = self.create_panel_with_options(options, workspace_id)?;
+        let panel = self
+            .board
+            .panel_mut(panel_id)
+            .ok_or_else(|| horizon_core::Error::State(format!("panel {} was not created", panel_id.0)))?;
+        panel.write_input(prompt.as_bytes());
+        let panel_local_id = panel.local_id.clone();
+        let reviewer = AgentPanelLink::new(reviewer_kind, Some(panel_local_id));
+        self.update_agent_squad(|squad| squad.run_mut(&run.id)?.start_reviewing(reviewer))?;
+        self.mark_runtime_dirty();
+        self.clear_squad_error();
+        Ok(())
+    }
+
+    fn squad_run_workspace_id(&self, run: &horizon_core::SquadRun) -> Option<WorkspaceId> {
+        for slot in &run.performers {
+            if let Some(panel_local_id) = &slot.panel_local_id
+                && let Some(workspace_id) = self.workspace_id_for_panel_local_id(panel_local_id)
+            {
+                return Some(workspace_id);
+            }
+        }
+        if let Some(panel_local_id) = run.reviewer.as_ref().and_then(|link| link.panel_local_id.as_ref()) {
+            return self.workspace_id_for_panel_local_id(panel_local_id);
+        }
+        None
+    }
+
+    fn workspace_id_for_panel_local_id(&self, panel_local_id: &str) -> Option<WorkspaceId> {
+        let panel_id = self.board.panel_id_by_local_id(panel_local_id)?;
+        self.board.panel_workspace_id(panel_id)
+    }
+
+    fn set_squad_error(&mut self, message: String) {
+        if let Some(state) = &mut self.squad_panel {
+            state.error_message = Some(message);
+        }
+    }
+
+    fn clear_squad_error(&mut self) {
+        if let Some(state) = &mut self.squad_panel {
+            state.error_message = None;
         }
     }
 
@@ -363,6 +600,11 @@ fn performer_prompt(run_id: &str, draft: &SquadRunDraft, slot: &PerformerSlot) -
         request = slot.work_item.request,
         criteria = criteria,
     )
+}
+
+fn blocked_review_message(run: &horizon_core::SquadRun) -> String {
+    let slots = blocked_slots(run).join(", ");
+    format!("Review paused for blocked slots: {slots}. Use Review Done Slots to skip blocked work.")
 }
 
 fn truncated_goal(goal: &str) -> String {
