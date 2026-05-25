@@ -63,6 +63,20 @@ impl AgentSquad {
             .find(|run| run.id == run_id)
             .ok_or_else(|| Error::State(format!("squad run {run_id} was not found")))
     }
+
+    /// Remove a run from the model and return it for cleanup/audit work.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no run with `run_id` exists.
+    pub fn remove_run(&mut self, run_id: &str) -> Result<SquadRun> {
+        let index = self
+            .runs
+            .iter()
+            .position(|run| run.id == run_id)
+            .ok_or_else(|| Error::State(format!("squad run {run_id} was not found")))?;
+        Ok(self.runs.remove(index))
+    }
 }
 
 impl Default for AgentSquad {
@@ -114,6 +128,16 @@ impl SquadRun {
 
     pub fn set_primary_worktree(&mut self, path: PathBuf) {
         self.primary_worktree = Some(path);
+    }
+
+    #[must_use]
+    pub fn worktree_paths(&self) -> Vec<PathBuf> {
+        let mut paths = Vec::with_capacity(self.performers.len() + usize::from(self.primary_worktree.is_some()));
+        if let Some(path) = &self.primary_worktree {
+            paths.push(path.clone());
+        }
+        paths.extend(self.performers.iter().map(|slot| slot.scratch.clone()));
+        paths
     }
 
     /// Mark a performer slot as dispatched to a panel.
@@ -428,6 +452,32 @@ mod tests {
         assert!(error.to_string().contains("cannot start review"));
         assert_eq!(run.performers[0].work_item.status, WorkStatus::Blocked);
         assert_eq!(run.status, RunStatus::Working);
+    }
+
+    #[test]
+    fn remove_run_returns_removed_run_only() {
+        let mut squad = AgentSquad::new();
+        squad.create_run("First", 1);
+        let second_id = squad.create_run("Second", 2).id.clone();
+
+        let removed = squad.remove_run(&second_id).unwrap();
+
+        assert_eq!(removed.goal, "Second");
+        assert_eq!(squad.runs.len(), 1);
+        assert_eq!(squad.runs[0].goal, "First");
+    }
+
+    #[test]
+    fn worktree_paths_include_review_before_slots() {
+        let mut run = SquadRun::new("run-1", "Fix issues", 123);
+        run.set_primary_worktree(PathBuf::from("/tmp/squad/run-1/_review"));
+        run.queue_plan("Plan", vec![slot("s1"), slot("s2")]);
+
+        let paths = run.worktree_paths();
+
+        assert_eq!(paths[0], PathBuf::from("/tmp/squad/run-1/_review"));
+        assert_eq!(paths[1], PathBuf::from("/tmp/squad/s1"));
+        assert_eq!(paths[2], PathBuf::from("/tmp/squad/s2"));
     }
 
     fn slot(id: &str) -> PerformerSlot {

@@ -314,7 +314,7 @@ Scope:
 Manual smoke:
 
 1. Create two Squad runs in the same Horizon session.
-2. Delete one run.
+2. Delete one run from either the dashboard row action or the run lane.
 3. Confirm only that run's scratch directory is removed.
 4. Confirm the other run's worktrees and `squad.json` entry remain.
 5. Restart Horizon with the same `HORIZON_HOME`.
@@ -330,7 +330,7 @@ Expected:
 
 - Deleting a run cannot remove the source checkout or another run's worktree.
 - Restart restore is idempotent.
-- Cleanup errors are visible and leave state recoverable.
+- Cleanup errors are visible and leave the run entry recoverable.
 - The dashboard remains accurate after restart, delete, and restore.
 
 Evidence:

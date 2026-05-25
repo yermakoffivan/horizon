@@ -28,6 +28,9 @@ pub(super) fn render_run_lane(ui: &mut egui::Ui, squad: &AgentSquad, run_id: &st
             if ui.add(util::chrome_button("Dashboard")).clicked() {
                 action = SquadAction::Dashboard;
             }
+            if ui.add(util::chrome_button("Delete")).clicked() {
+                action = SquadAction::DeleteRun(run.id.clone());
+            }
         });
     });
     ui.add_space(8.0);

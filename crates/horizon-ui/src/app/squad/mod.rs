@@ -6,6 +6,7 @@ mod review;
 mod slot_detail;
 mod state;
 
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,6 +31,7 @@ enum SquadAction {
     Dashboard,
     NewRun,
     OpenRun(String),
+    DeleteRun(String),
     OpenSlot {
         run_id: String,
         slot_id: String,
@@ -120,6 +122,7 @@ impl HorizonApp {
                     state.error_message = None;
                 }
             }
+            SquadAction::DeleteRun(run_id) => self.delete_squad_run(&run_id),
             SquadAction::OpenSlot { run_id, slot_id } => self.open_squad_slot_detail(&run_id, &slot_id),
             SquadAction::RefreshSlotDetail => self.refresh_squad_slot_detail(),
             SquadAction::FocusPanel(panel_local_id) => {
@@ -481,6 +484,45 @@ impl HorizonApp {
         }
     }
 
+    fn delete_squad_run(&mut self, run_id: &str) {
+        let Some(run) = self.agent_squad.runs.iter().find(|run| run.id == run_id).cloned() else {
+            self.set_squad_error(format!("squad run {run_id} was not found"));
+            return;
+        };
+
+        if let Err(error) = self.cleanup_squad_run_worktrees(&run) {
+            tracing::warn!("failed to delete Squad run worktrees: {error}");
+            self.set_squad_error(error.to_string());
+            return;
+        }
+
+        if let Err(error) = self.update_agent_squad(|squad| {
+            squad.remove_run(run_id)?;
+            Ok(())
+        }) {
+            tracing::warn!("failed to remove Squad run: {error}");
+            self.set_squad_error(error.to_string());
+            return;
+        }
+
+        if let Some(state) = &mut self.squad_panel {
+            state.view = SquadView::Dashboard;
+            state.slot_detail = None;
+            state.error_message = None;
+        }
+        self.mark_runtime_dirty();
+    }
+
+    fn cleanup_squad_run_worktrees(&self, run: &horizon_core::SquadRun) -> horizon_core::Result<()> {
+        let run_root = self.session_store.home().root().join("squad-tmp").join(&run.id);
+        for path in run.worktree_paths().iter().rev() {
+            validate_squad_cleanup_path(&run_root, path)?;
+            WorktreeManager::remove(path)?;
+        }
+        remove_empty_run_root(&run_root)?;
+        Ok(())
+    }
+
     fn fail_squad_run(&mut self, run_id: &str, reason: String) {
         if let Err(error) = self.update_agent_squad(|squad| {
             squad.run_mut(run_id)?.fail(reason);
@@ -569,6 +611,26 @@ fn cleanup_created_worktrees(paths: &[PathBuf]) {
     }
 }
 
+fn validate_squad_cleanup_path(run_root: &Path, path: &Path) -> horizon_core::Result<()> {
+    if path.starts_with(run_root) {
+        Ok(())
+    } else {
+        Err(horizon_core::Error::State(format!(
+            "refusing to delete Squad path outside run root: {}",
+            path.display()
+        )))
+    }
+}
+
+fn remove_empty_run_root(run_root: &Path) -> horizon_core::Result<()> {
+    match std::fs::remove_dir(run_root) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn slot_request(draft: &SquadRunDraft, index: usize) -> String {
     format!(
         "Work independently on performer slot {index} for this goal:\n\n{}",
@@ -631,4 +693,27 @@ fn current_unix_millis() -> i64 {
 
 pub(super) fn empty_squad() -> AgentSquad {
     AgentSquad::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::validate_squad_cleanup_path;
+
+    #[test]
+    fn cleanup_path_validation_accepts_run_root_children() {
+        let run_root = PathBuf::from("/tmp/horizon/squad-tmp/run-1");
+        let slot = run_root.join("s1");
+
+        assert!(validate_squad_cleanup_path(&run_root, &slot).is_ok());
+    }
+
+    #[test]
+    fn cleanup_path_validation_rejects_paths_outside_run_root() {
+        let run_root = PathBuf::from("/tmp/horizon/squad-tmp/run-1");
+        let other_run = PathBuf::from("/tmp/horizon/squad-tmp/run-2/s1");
+
+        assert!(validate_squad_cleanup_path(&run_root, &other_run).is_err());
+    }
 }
